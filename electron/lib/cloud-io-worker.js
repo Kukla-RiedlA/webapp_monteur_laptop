@@ -10,6 +10,7 @@ const fs = require('fs');
 const { parentPort } = require('worker_threads');
 const { replaceFileWithoutUnlink } = require('./replace-file-cloud-safe');
 const { win32FsPath } = require('./win32-long-path');
+const { contentShaForFileStat, sha256Hex } = require('./sync-file-change');
 
 function statInfo(filePath) {
   const primary = win32FsPath(filePath);
@@ -71,6 +72,21 @@ function readFileBytes(filePath) {
   }
 }
 
+function sha256FileAt(filePath) {
+  let st;
+  try {
+    st = statInfo(filePath);
+  } catch (_) {
+    return '';
+  }
+  if (!st.isFile) return '';
+  try {
+    return contentShaForFileStat(st, () => readFileBytes(filePath));
+  } catch (_) {
+    return '';
+  }
+}
+
 parentPort.on('message', async (msg) => {
   const id = msg && msg.id;
   try {
@@ -98,6 +114,15 @@ parentPort.on('message', async (msg) => {
       const bytes = Buffer.allocUnsafeSlow(raw.length);
       raw.copy(bytes);
       parentPort.postMessage({ id, ok: true, bytes }, [bytes.buffer]);
+      return;
+    }
+    if (op === 'sha256File') {
+      parentPort.postMessage({ id, ok: true, result: sha256FileAt(msg.path) });
+      return;
+    }
+    if (op === 'sha256Buffer') {
+      const bytes = msg.bytes ? Buffer.from(msg.bytes) : Buffer.alloc(0);
+      parentPort.postMessage({ id, ok: true, result: sha256Hex(bytes) });
       return;
     }
     throw new Error('Unbekannte Datei-Operation.');

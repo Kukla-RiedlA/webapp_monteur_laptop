@@ -1227,7 +1227,12 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
     : (Array.isArray(mess.wiegungen) ? mess.wiegungen : []);
   const wiegRows = wiegSource.filter((row) => weighingRowHasData(row) && rowInPdf(row));
   if (wiegRows.length) {
-    blocks.push({ type: 'wieg', rows: wiegRows });
+    blocks.push({
+      type: 'wieg',
+      rows: wiegRows,
+      massU: protocolMassUnit(payload.einheit_masse, 'kg'),
+      rateU: protocolRateUnit(payload.einheit_leistung, 't/h'),
+    });
   }
   const kettenSource = Array.isArray(payload.ketten)
     ? payload.ketten
@@ -1238,7 +1243,13 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
   const kettenRows = kettenSource.filter((row) => chainRowHasData(row) && rowInPdf(row));
   const kettenMessRows = kettenMessSource.filter((row) => chainMessHasData(row) && rowInPdf(row));
   if (kettenRows.length || kettenMessRows.length) {
-    blocks.push({ type: 'kette', ketten: kettenRows, messungen: kettenMessRows });
+    blocks.push({
+      type: 'kette',
+      ketten: kettenRows,
+      messungen: kettenMessRows,
+      massU: protocolMassUnit(payload.einheit_kette, 't'),
+      rateU: protocolRateUnit(payload.einheit_kette_leistung, 't/h'),
+    });
   }
     const bemerk = stripHtml(payload.bemerkungen || '');
     if (bemerk) blocks.push({ type: 'bemerk', text: bemerk });
@@ -1496,13 +1507,13 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
         y = drawSectionTitle(page, y, de ? 'Wiegungen' : 'Weighings');
         const wCols = [
           { key: 'nr', label: '#', w: 22 },
-          { key: 'bandwaage_kg', label: de ? 'Band' : 'Belt', w: 52 },
-          { key: 'kontrollwaage_kg', label: de ? 'Kontr.' : 'Ctrl', w: 52 },
-          { key: 'fehler_kg', label: 'kg', w: 44 },
+          { key: 'bandwaage_kg', label: (de ? 'Band' : 'Belt') + ' ' + (block.massU || 'kg'), w: 52 },
+          { key: 'kontrollwaage_kg', label: (de ? 'Kontr.' : 'Ctrl') + ' ' + (block.massU || 'kg'), w: 52 },
+          { key: 'fehler_kg', label: block.massU || 'kg', w: 44 },
           { key: 'fehler_prozent', label: '%', w: 40 },
-          { key: 'leistung_th', label: 't/h', w: 40 },
-          { key: 'tara_kg', label: de ? 'Tara' : 'Tare', w: 44 },
-          { key: 'brutto_kg', label: de ? 'Brutto' : 'Gross', w: 48 },
+          { key: 'leistung_th', label: block.rateU || 't/h', w: 44 },
+          { key: 'tara_kg', label: (de ? 'Tara' : 'Tare') + ' ' + (block.massU || 'kg'), w: 44 },
+          { key: 'brutto_kg', label: (de ? 'Brutto' : 'Gross') + ' ' + (block.massU || 'kg'), w: 52 },
           { key: 'bemerkung', label: de ? 'Bemerkung' : 'Remark', w: 0 },
         ];
         const fixedW = wCols.reduce((s, c) => s + (c.key === 'bemerkung' ? 0 : c.w), 0);
@@ -1621,13 +1632,13 @@ async function generateServiceprotokollPdfBuffer(payload, options) {
           y = drawSectionTitle(page, y, de ? 'Messungen' : 'Measurements');
           const mCols = fitLast([
             { key: 'nr', label: '#', w: 20 },
-            { key: 'bandwaage_t', label: de ? 'Band' : 'Belt', w: 48 },
-            { key: 'pruefkette_t', label: de ? 'Prüfk.' : 'Chain', w: 48 },
+            { key: 'bandwaage_t', label: (de ? 'Band' : 'Belt') + ' ' + (block.massU || 't'), w: 52 },
+            { key: 'pruefkette_t', label: (de ? 'Prüfk.' : 'Chain') + ' ' + (block.massU || 't'), w: 52 },
             { key: 'kg_pro_m', label: 'kg/m', w: 48 },
             { key: 'geschwindigkeit_ms', label: 'm/s', w: 36 },
             { key: 'messzeit_s', label: 's', w: 32 },
             { key: 'fehler_prozent', label: '%', w: 40 },
-            { key: 'leistung_th', label: 't/h', w: 36 },
+            { key: 'leistung_th', label: block.rateU || 't/h', w: 40 },
             { key: 'bemerkung', label: de ? 'Bemerkung' : 'Remark', w: 0 },
           ], 'bemerkung');
           const mRows = block.messungen.map((row, i) => ({
@@ -1865,6 +1876,16 @@ function rowHasAnyValue(row) {
   });
 }
 
+function protocolMassUnit(value, fallback) {
+  const s = String(value || '').trim();
+  return s === 't' || s === 'kg' || s === 'g' ? s : (fallback || 'kg');
+}
+
+function protocolRateUnit(value, fallback) {
+  const s = String(value || '').trim();
+  return s === 't/h' || s === 'kg/h' ? s : (fallback || 't/h');
+}
+
 function weighingRowHasData(row) {
   if (!row || typeof row !== 'object') return false;
   return ['bandwaage_kg', 'kontrollwaage_kg', 'fehler_kg', 'fehler_prozent', 'leistung_th', 'tara_kg', 'brutto_kg', 'bemerkung'].some(
@@ -1915,27 +1936,29 @@ async function generateKontrollwiegungPdfBuffer(payload, options) {
   // PDF: nur Zeilen mit Druck-Flag (in_pdf); Summe erzwingt Druck
   const dataRows = rowsAll.filter((row) => rowInPdf(row) && rowHasAnyValue(row));
 
+  const massU = protocolMassUnit(payload.einheit_masse, 'kg');
+  const rateU = protocolRateUnit(payload.einheit_leistung, 't/h');
   const cols = de
     ? [
         { key: 'nr', label: 'Nr.', sub: 'No.', w: 28, align: 'center' },
-        { key: 'bandwaage_kg', label: 'Bandwaage [kg]', sub: 'belt scale', w: 88, align: 'right', digits: 3 },
-        { key: 'kontrollwaage_kg', label: 'Kontrollwaage [kg]', sub: 'control scale', w: 98, align: 'right', digits: 3 },
-        { key: 'fehler_kg', label: 'Fehler [kg]', sub: 'difference', w: 72, align: 'right', digits: 3 },
+        { key: 'bandwaage_kg', label: 'Bandwaage [' + massU + ']', sub: 'belt scale', w: 88, align: 'right', digits: 3 },
+        { key: 'kontrollwaage_kg', label: 'Kontrollwaage [' + massU + ']', sub: 'control scale', w: 98, align: 'right', digits: 3 },
+        { key: 'fehler_kg', label: 'Fehler [' + massU + ']', sub: 'difference', w: 72, align: 'right', digits: 3 },
         { key: 'fehler_prozent', label: 'Fehler [%]', sub: 'difference', w: 68, align: 'right', kind: 'pct' },
-        { key: 'leistung_th', label: 'Leistung [t/h]', sub: 'rate', w: 72, align: 'right', digits: 0 },
-        { key: 'tara_kg', label: 'Tara [kg]', sub: 'tare', w: 68, align: 'right', digits: 0 },
-        { key: 'brutto_kg', label: 'Brutto [kg]', sub: 'gross', w: 72, align: 'right', digits: 0 },
+        { key: 'leistung_th', label: 'Leistung [' + rateU + ']', sub: 'rate', w: 72, align: 'right', digits: 0 },
+        { key: 'tara_kg', label: 'Tara [' + massU + ']', sub: 'tare', w: 68, align: 'right', digits: 0 },
+        { key: 'brutto_kg', label: 'Brutto [' + massU + ']', sub: 'gross', w: 72, align: 'right', digits: 0 },
         { key: 'bemerkung', label: 'Bemerkungen', sub: 'remarks', w: 0, align: 'left' },
       ]
     : [
         { key: 'nr', label: 'No.', sub: 'Nr.', w: 28, align: 'center' },
-        { key: 'bandwaage_kg', label: 'Belt scale [kg]', sub: 'Bandwaage', w: 88, align: 'right', digits: 3 },
-        { key: 'kontrollwaage_kg', label: 'Control scale [kg]', sub: 'Kontrollwaage', w: 98, align: 'right', digits: 3 },
-        { key: 'fehler_kg', label: 'Difference [kg]', sub: 'Fehler', w: 72, align: 'right', digits: 3 },
+        { key: 'bandwaage_kg', label: 'Belt scale [' + massU + ']', sub: 'Bandwaage', w: 88, align: 'right', digits: 3 },
+        { key: 'kontrollwaage_kg', label: 'Control scale [' + massU + ']', sub: 'Kontrollwaage', w: 98, align: 'right', digits: 3 },
+        { key: 'fehler_kg', label: 'Difference [' + massU + ']', sub: 'Fehler', w: 72, align: 'right', digits: 3 },
         { key: 'fehler_prozent', label: 'Difference [%]', sub: 'Fehler', w: 68, align: 'right', kind: 'pct' },
-        { key: 'leistung_th', label: 'Rate [t/h]', sub: 'Leistung', w: 72, align: 'right', digits: 0 },
-        { key: 'tara_kg', label: 'Tare [kg]', sub: 'Tara', w: 68, align: 'right', digits: 0 },
-        { key: 'brutto_kg', label: 'Gross [kg]', sub: 'Brutto', w: 72, align: 'right', digits: 0 },
+        { key: 'leistung_th', label: 'Rate [' + rateU + ']', sub: 'Leistung', w: 72, align: 'right', digits: 0 },
+        { key: 'tara_kg', label: 'Tare [' + massU + ']', sub: 'Tara', w: 68, align: 'right', digits: 0 },
+        { key: 'brutto_kg', label: 'Gross [' + massU + ']', sub: 'Brutto', w: 72, align: 'right', digits: 0 },
         { key: 'bemerkung', label: 'Remarks', sub: 'Bemerkungen', w: 0, align: 'left' },
       ];
   const tableInnerW = PAGE_W - marginX * 2;
@@ -2354,27 +2377,29 @@ async function generateSchleppkettenPdfBuffer(payload, options) {
   const rowsAll = skLocal.enrichMessungen(Array.isArray(payload.messungen) ? payload.messungen : []);
   const dataRows = rowsAll.filter((row) => rowInPdf(row) && rowHasAnyValue(row));
 
+  const massU = protocolMassUnit(payload.einheit_masse, 't');
+  const rateU = protocolRateUnit(payload.einheit_leistung, 't/h');
   const cols = de
     ? [
         { key: 'nr', label: 'Nr.', sub: 'No.', w: 26, align: 'center' },
-        { key: 'bandwaage_t', label: 'Bandwaage [t]', sub: 'belt scale', w: 78, align: 'right', digits: 3 },
-        { key: 'pruefkette_t', label: 'Prüfkette [t]', sub: 'test chain', w: 78, align: 'right', digits: 3 },
+        { key: 'bandwaage_t', label: 'Bandwaage [' + massU + ']', sub: 'belt scale', w: 78, align: 'right', digits: 3 },
+        { key: 'pruefkette_t', label: 'Prüfkette [' + massU + ']', sub: 'test chain', w: 78, align: 'right', digits: 3 },
         { key: 'kg_pro_m', label: 'kg/m', sub: 'kg/m', w: 62, align: 'right', digits: 4 },
         { key: 'geschwindigkeit_ms', label: 'Geschw. [m/s]', sub: 'speed', w: 70, align: 'right', digits: 2 },
         { key: 'messzeit_s', label: 'Messzeit [s]', sub: 'measure time', w: 62, align: 'right', digits: 0 },
         { key: 'fehler_prozent', label: 'Fehler [%]', sub: 'difference', w: 62, align: 'right', kind: 'pct' },
-        { key: 'leistung_th', label: 'Leistung [t/h]', sub: 'rate', w: 70, align: 'right', digits: 1 },
+        { key: 'leistung_th', label: 'Leistung [' + rateU + ']', sub: 'rate', w: 70, align: 'right', digits: 1 },
         { key: 'bemerkung', label: 'Bemerkungen', sub: 'remarks', w: 0, align: 'left' },
       ]
     : [
         { key: 'nr', label: 'No.', sub: 'Nr.', w: 26, align: 'center' },
-        { key: 'bandwaage_t', label: 'Belt scale [t]', sub: 'Bandwaage', w: 78, align: 'right', digits: 3 },
-        { key: 'pruefkette_t', label: 'Test chain [t]', sub: 'Prüfkette', w: 78, align: 'right', digits: 3 },
+        { key: 'bandwaage_t', label: 'Belt scale [' + massU + ']', sub: 'Bandwaage', w: 78, align: 'right', digits: 3 },
+        { key: 'pruefkette_t', label: 'Test chain [' + massU + ']', sub: 'Prüfkette', w: 78, align: 'right', digits: 3 },
         { key: 'kg_pro_m', label: 'kg/m', sub: 'kg/m', w: 62, align: 'right', digits: 4 },
         { key: 'geschwindigkeit_ms', label: 'Speed [m/s]', sub: 'Geschw.', w: 70, align: 'right', digits: 2 },
         { key: 'messzeit_s', label: 'Measure time [s]', sub: 'Messzeit', w: 62, align: 'right', digits: 0 },
         { key: 'fehler_prozent', label: 'Difference [%]', sub: 'Fehler', w: 62, align: 'right', kind: 'pct' },
-        { key: 'leistung_th', label: 'Rate [t/h]', sub: 'Leistung', w: 70, align: 'right', digits: 1 },
+        { key: 'leistung_th', label: 'Rate [' + rateU + ']', sub: 'Leistung', w: 70, align: 'right', digits: 1 },
         { key: 'bemerkung', label: 'Remarks', sub: 'Bemerkungen', w: 0, align: 'left' },
       ];
   const tableInnerW = PAGE_W - marginX * 2;
@@ -3047,7 +3072,7 @@ async function embedContentImage(pdfDoc, src) {
 
 /**
  * Montagebericht – A4 Hochformat, Corporate-Layout wie Serviceprotokoll.
- * payload: { kopfdaten, tableRows, grundDesEinsatzes, grundDesEinsatzes_html, freitext }
+ * payload: { kopfdaten, tableRows, grundDesEinsatzes, grundDesEinsatzes_html, freitext, empfehlungen, empfehlungen_html }
  * options: { lang: 'de'|'en' }
  */
 async function generateMontageberichtPdfBuffer(payload, options) {
@@ -3092,6 +3117,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     contact: de ? 'Ansprechperson' : 'Contact person',
     grund: de ? 'Grund des Einsatzes' : 'Purpose of visit',
     bemerk: de ? 'Bemerkungen' : 'Remarks',
+    empf: de ? 'Empfehlungen' : 'Recommendations',
     type: de ? 'Type' : 'Type',
     pos: de ? 'Pos.Nr.' : 'Pos. no.',
     page: de ? 'Seite' : 'Page',
@@ -3126,6 +3152,8 @@ async function generateMontageberichtPdfBuffer(payload, options) {
   const grundHtml = String((payload && payload.grundDesEinsatzes_html) || '').trim();
   const bemerkPlain = String(kopf.bemerkungen || '').trim();
   const bemerkHtml = String(kopf.bemerkungen_html || '').trim();
+  const empfPlain = String((payload && payload.empfehlungen) || kopf.empfehlungen || '').trim();
+  const empfHtml = String((payload && payload.empfehlungen_html) || kopf.empfehlungen_html || '').trim();
 
   const logo = await embedLogo(pdfDoc);
   const sigImg = await embedSignatureImage(pdfDoc, payload && payload.technician_signature_png);
@@ -3148,6 +3176,7 @@ async function generateMontageberichtPdfBuffer(payload, options) {
 
   const grundBlocks = await resolveBlocks(grundHtml, grundPlain);
   const bemerkBlocks = await resolveBlocks(bemerkHtml, bemerkPlain);
+  const empfBlocks = await resolveBlocks(empfHtml, empfPlain);
   const fnSections = [];
   for (const row of tableRows) {
     const fn = String((row && row.fabrikationsnummer) || '').trim();
@@ -3328,6 +3357,10 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     queue.push({ type: 'section', title: L.grund });
     grundBlocks.forEach((b) => queue.push(b));
   }
+  if (bemerkBlocks.length) {
+    queue.push({ type: 'section', title: L.bemerk });
+    bemerkBlocks.forEach((b) => queue.push(b));
+  }
   fnSections.forEach((sec) => {
     const hasBody = sec.blocks && sec.blocks.length;
     const hasMeta = String(sec.type || '').trim() || String(sec.position || '').trim();
@@ -3341,9 +3374,9 @@ async function generateMontageberichtPdfBuffer(payload, options) {
     if (hasBody) sec.blocks.forEach((b) => queue.push(b));
     queue.push({ type: 'fn_sep' });
   });
-  if (bemerkBlocks.length) {
-    queue.push({ type: 'section', title: L.bemerk });
-    bemerkBlocks.forEach((b) => queue.push(b));
+  if (empfBlocks.length) {
+    queue.push({ type: 'section', title: L.empf });
+    empfBlocks.forEach((b) => queue.push(b));
   }
 
   const pages = [];

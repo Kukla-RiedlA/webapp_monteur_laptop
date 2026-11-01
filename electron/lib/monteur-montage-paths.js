@@ -23,7 +23,7 @@ const {
   montageberichtExportStem: montageberichtExportStemRaw,
   isLegacyMontageberichtExportName,
 } = require('./protocol-pdf-names');
-const { sweepOnedriveNumberedDuplicates, sweepOnedriveNumberedDuplicatesTree } = require('./onedrive-numbered-duplicates');
+const { sweepOnedriveNumberedDuplicatesTree } = require('./onedrive-numbered-duplicates');
 
 function sanitizeDienstreiseFolderPart(str, maxLen) {
   if (typeof str !== 'string') return '';
@@ -136,8 +136,7 @@ function cleanupLegacyMontageberichtEnPdfLocal(protokolleDir, fileBase) {
       removed.push(name);
     } catch (_) {}
   }
-  const swept = sweepOnedriveNumberedDuplicates(protokolleDir);
-  return removed.concat(swept);
+  return removed;
 }
 
 /**
@@ -730,9 +729,6 @@ function dirHasVisibleEntries(dirPath) {
   }
 }
 
-const lastAnlageFnEnsureAt = new Map();
-const ANLAGE_FN_ENSURE_TTL_MS = 90 * 1000;
-
 async function renameAsync(src, dst) {
   await fs.promises.rename(src, dst);
 }
@@ -741,7 +737,26 @@ async function rmRecursiveAsync(dirPath) {
   await fs.promises.rm(dirPath, { recursive: true, force: true });
 }
 
-function mergeDirContentsInto(srcDir, dstDir) {
+function uniqueDestPath(dst) {
+  if (!fs.existsSync(dst)) return dst;
+  const dir = path.dirname(dst);
+  const ext = path.extname(dst);
+  const base = path.basename(dst, ext);
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = path.join(dir, base + '_' + i + ext);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(dir, base + '_' + Date.now() + ext);
+}
+
+/**
+ * @param {string} srcDir
+ * @param {string} dstDir
+ * @param {{ uniqueOnCollision?: boolean }} [mergeOpts]
+ * uniqueOnCollision legt eine schon vorhandene Datei unter einem freien Namen ab, statt sie liegen zu lassen.
+ */
+function mergeDirContentsInto(srcDir, dstDir, mergeOpts) {
+  const uniqueOnCollision = !!(mergeOpts && mergeOpts.uniqueOnCollision);
   let names;
   try {
     names = fs.readdirSync(srcDir, { withFileTypes: true });
@@ -759,12 +774,16 @@ function mergeDirContentsInto(srcDir, dstDir) {
         if (ent.isDirectory()) {
           if (!fs.existsSync(dst)) {
             await renameAsync(src, dst);
-          } else {
-            await mergeDirContentsInto(src, dst);
-            await rmRecursiveAsync(src);
+          } else if (fs.statSync(dst).isDirectory()) {
+            await mergeDirContentsInto(src, dst, mergeOpts);
+            if (!dirHasVisibleEntries(src)) await rmRecursiveAsync(src);
+          } else if (uniqueOnCollision) {
+            await renameAsync(src, uniqueDestPath(dst));
           }
         } else if (!fs.existsSync(dst)) {
           await renameAsync(src, dst);
+        } else if (uniqueOnCollision && fs.statSync(dst).isFile()) {
+          await renameAsync(src, uniqueDestPath(dst));
         }
       } catch (err) {
         console.warn('[monteur-paths] merge', src, '->', dst, err && err.message ? err.message : err);
@@ -1063,6 +1082,48 @@ function migrateAliasFnFolders(reiseDir, fabFolderEntries) {
 }
 
 /**
+ * Beim Annehmen: Alias-Ordner nur umbenennen, wenn das Ziel noch fehlt.
+ * Liegen beide, bleiben beide. Nichts wird gelöscht.
+ */
+async function renameFnFoldersIfTargetMissing(reiseDir, fabFolderEntries) {
+  if (!reiseDir) return;
+  for (const sub of ['Dokumente_Monteur', 'Dokumente_Anlage']) {
+    const base = path.join(reiseDir, sub);
+    if (!fs.existsSync(base)) continue;
+    const dirNames = listSubdirNames(base);
+    for (const entry of fabFolderEntries || []) {
+      const fab = String((entry && entry.fab) || '').trim();
+      const can = String((entry && entry.folder_name_canonical) || '').trim();
+      if (!fab || !can || can === fab) continue;
+      const target = path.join(base, can);
+      if (isBareFabFolderName(fab)) {
+        const staleBare = path.join(base, fab);
+        if (fs.existsSync(staleBare) && !fs.existsSync(target)) {
+          try {
+            await renameAsync(staleBare, target);
+          } catch (err) {
+            console.warn('[monteur-paths] FN-Umbenennen', fab, '->', can, err && err.message ? err.message : err);
+          }
+        }
+      }
+      if (fs.existsSync(target)) continue;
+      const aliases = collectAliasFoldersToMerge(dirNames, fab, can);
+      for (const name of aliases) {
+        const stale = path.join(base, name);
+        if (!fs.existsSync(stale) || fs.existsSync(target)) continue;
+        try {
+          await renameAsync(stale, target);
+        } catch (err) {
+          console.warn('[monteur-paths] FN-Umbenennen', name, '->', can, err && err.message ? err.message : err);
+        }
+        break;
+      }
+      await yieldEventLoop();
+    }
+  }
+}
+
+/**
  * Zieht Manifest-Pfade auf den kanonischen FN-Ordner (Leerzeichen- vs. Unterstrich-Alias).
  * @param {string} relPath
  * @param {Array<{ fab?: string|number, folder_name_canonical?: string }>} [fabMap]
@@ -1099,12 +1160,8 @@ function rewriteFnFolderSegmentInRel(relPath, fabMap) {
  * @param {string} reiseDir
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
  */
-async function ensureAnlageFnDirs(reiseDir, fabFolderEntries) {
-  const key = String(reiseDir || '');
-  const now = Date.now();
-  if (key && now - (lastAnlageFnEnsureAt.get(key) || 0) < ANLAGE_FN_ENSURE_TTL_MS) return;
-  await migrateAliasFnFolders(reiseDir, fabFolderEntries);
-  if (key) lastAnlageFnEnsureAt.set(key, now);
+async function ensureAnlageFnDirs(_reiseDir, _fabFolderEntries) {
+  /* Kein Zusammenlegen. Das hat bei jedem Sync ganze FN-Ordner auf OneDrive gelöscht. */
 }
 
 /**
@@ -1136,16 +1193,36 @@ function ensureCanonicalFnFolders(reiseDir, fabFolderEntries, montageFolderName)
 
 /**
  * Vorhandene Dokumente_Monteur/<Fileserver-FN>/Montage/<Auftragsordner>/ alignen.
- * Geschwister derselben Identität (Datum+Monteur) bzw. previousName → Desired umbenennen/mergen.
+ * Geschwister derselben Identität (Datum+Monteur), gleicher Datums-Rest bzw. previousName → Desired umbenennen/mergen.
  * Keine leeren FN-/Montage-/Bilder-Ordner auf Vorrat.
  *
  * @param {string} reiseDir
  * @param {Array<{ fab: string|number, folder_name_canonical: string }>} fabFolderEntries
  * @param {string} auftragsordner Desired-Name
- * @param {{ technicianDisplayName?: string, previousName?: string|null }} [opts]
+ * @param {{ technicianDisplayName?: string, previousName?: string|null, allowDateTail?: boolean }} [opts]
+ * @returns {Promise<{ desired: string, renamed: string[], leftover: string[] }>}
  */
 async function ensureMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts) {
-  await alignMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts);
+  return alignMonteurMontageDirs(reiseDir, fabFolderEntries, auftragsordner, opts);
+}
+
+/** Text nach YYYY-MM-DD_, leer wenn der Name kein Auftragsordner-Datum trägt. */
+function montageFolderDateTail(name) {
+  const m = String(name || '').trim().match(/^\d{4}-\d{2}-\d{2}_(.+)$/);
+  return m ? m[1] : '';
+}
+
+/**
+ * Gleicher Auftrag, nur das Beginndatum im Ordnernamen hat sich geändert.
+ * Nicht für den Explorer: dort bleibt die Datum+Monteur-Regel.
+ */
+function isMonteurMontageDateTailSibling(name, desired) {
+  const n = String(name || '').trim();
+  const d = String(desired || '').trim();
+  if (!n || !d || n === d) return false;
+  const tailName = montageFolderDateTail(n);
+  const tailDesired = montageFolderDateTail(d);
+  return !!(tailName && tailDesired && tailName === tailDesired);
 }
 
 /**
@@ -1165,20 +1242,24 @@ function isMonteurMontageIdentitySibling(name, desired, datePrefix, monteurSuffi
 
 /**
  * Bestehende Auftragsordner umbenennen/mergen — keine leeren FN-/Montage-Bäume.
- * @returns {string} Desired-Name
+ * allowDateTail default true. Bei geteilter Dienstreise false: nur previousName und Datum+Monteur.
+ * @returns {Promise<{ desired: string, renamed: string[], leftover: string[] }>}
  */
-async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, opts) {
-  await migrateAliasFnFolders(reiseDir, fabFolderEntries);
+async function alignMonteurMontageDirs(reiseDir, _fabFolderEntries, desiredName, opts) {
   const desired = String(desiredName || '').trim();
+  const empty = { desired, renamed: [], leftover: [] };
   const monteurBase = path.join(reiseDir, 'Dokumente_Monteur');
-  if (!desired || !fs.existsSync(monteurBase)) return desired;
+  if (!desired || !fs.existsSync(monteurBase)) return empty;
 
   const techName = opts && opts.technicianDisplayName != null ? String(opts.technicianDisplayName) : '';
   const previousName = opts && opts.previousName != null ? String(opts.previousName).trim() : '';
+  const allowDateTail = !(opts && opts.allowDateTail === false);
   const monteurPart = sanitizeDienstreiseFolderPart(techName || 'Monteur') || 'Monteur';
   const monteurSuffix = '_' + monteurPart;
   const dateMatch = desired.match(/^(\d{4}-\d{2}-\d{2})_/);
   const datePrefix = dateMatch ? dateMatch[1] + '_' : '';
+  const renamed = [];
+  const leftover = [];
 
   const fnFolders = [];
   for (const name of listSubdirNames(monteurBase)) {
@@ -1208,6 +1289,10 @@ async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, 
       }
       if (isMonteurMontageIdentitySibling(child, desired, datePrefix, monteurSuffix)) {
         candidates.push(child);
+        continue;
+      }
+      if (allowDateTail && isMonteurMontageDateTailSibling(child, desired)) {
+        candidates.push(child);
       }
     }
     const desiredPath = path.join(montageDir, desired);
@@ -1218,8 +1303,10 @@ async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, 
         if (!fs.existsSync(desiredPath)) {
           await renameAsync(oldPath, desiredPath);
         } else {
-          await mergeDirContentsInto(oldPath, desiredPath);
-          await rmRecursiveAsync(oldPath);
+          await mergeDirContentsInto(oldPath, desiredPath, { uniqueOnCollision: true });
+          if (fs.existsSync(oldPath) && !dirHasVisibleEntries(oldPath)) {
+            await rmRecursiveAsync(oldPath);
+          }
         }
       } catch (err) {
         console.warn(
@@ -1230,10 +1317,12 @@ async function alignMonteurMontageDirs(reiseDir, fabFolderEntries, desiredName, 
           err && err.message ? err.message : err,
         );
       }
+      if (!fs.existsSync(oldPath)) renamed.push(oldName);
+      else leftover.push(oldName);
       await yieldEventLoop();
     }
   }
-  return desired;
+  return { desired, renamed, leftover };
 }
 
 /**
@@ -1375,6 +1464,7 @@ module.exports = {
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,
   isMonteurMontageIdentitySibling,
+  isMonteurMontageDateTailSibling,
   removeLegacyMonteurAuftragsordnerTopLevel,
   removeStaleBareFabMonteurDirs,
   removeUnrelatedTopLevelProjectFolders,
@@ -1387,6 +1477,7 @@ module.exports = {
   resolveFabMapLocal,
   unifyFabMapSharedRanges,
   migrateAliasFnFolders,
+  renameFnFoldersIfTargetMissing,
   rewriteFnFolderSegmentInRel,
   resolveExplorerListAbsDirs,
   collapseExplorerFnDirEntries,

@@ -69,8 +69,10 @@ function fixturePayload() {
       geliefertUeber: 'Direkt',
       servicetechniker: 'Test',
       ansprechperson: 'QA',
-      bemerkungen: 'Bemerkung nach FN-Block.',
-      bemerkungen_html: '<p>Bemerkung nach FN-Block.</p>',
+      bemerkungen: 'Bemerkung direkt unter dem Grund.',
+      bemerkungen_html: '<p>Bemerkung direkt unter dem Grund.</p>',
+      empfehlungen: 'Empfehlung ganz unten.',
+      empfehlungen_html: '<p>Empfehlung ganz unten.</p>',
     },
     grundDesEinsatzes: 'Grund fuellt Seite 1.',
     grundDesEinsatzes_html: grundHtml,
@@ -194,6 +196,30 @@ function assertFnHeaderKeepsText(pages) {
   }
 }
 
+function readingItems(pages) {
+  const out = [];
+  pages.forEach((p) => {
+    const items = p.items.slice().sort((a, b) => (b.y || 0) - (a.y || 0));
+    items.forEach((it) => out.push(it));
+  });
+  return out;
+}
+
+function assertSectionOrder(pages, labels) {
+  const items = readingItems(pages);
+  const idx = (needle) => items.findIndex((it) => String(it.str || '').indexOf(needle) >= 0);
+  const grund = idx(labels.grund);
+  const remarks = idx(labels.remarks);
+  const fnHead = items.findIndex(
+    (it) => /\bFN\.?\s*12494\b/.test(it.str) || (it.str.indexOf('12494') >= 0 && /FN/i.test(it.str)),
+  );
+  const empf = idx(labels.empf);
+  assert(grund >= 0, 'PDF: ' + labels.grund + ' fehlt');
+  assert(remarks > grund, 'PDF: ' + labels.remarks + ' muss direkt nach ' + labels.grund + ' kommen');
+  assert(fnHead > remarks, 'PDF: ' + labels.remarks + ' muss vor der FN-Leiste stehen');
+  assert(empf > fnHead, 'PDF: ' + labels.empf + ' muss nach der FN stehen');
+}
+
 async function rasterPdfToPngs(pdfBytes) {
   if (!process.versions.electron) {
     console.warn('PNG-Raster übersprungen (nicht unter Electron). npm run test:montagebericht-pdf-pagebreak');
@@ -276,6 +302,19 @@ async function run() {
   console.log('Seiten:', pages.length);
   assertFnHeaderKeepsText(pages);
   console.log('OK: FN-Leiste steht mit Textblock auf derselben Seite');
+  assertSectionOrder(pages, {
+    grund: 'Grund des Einsatzes',
+    remarks: 'Bemerkungen',
+    empf: 'Empfehlungen',
+  });
+  const enBytes = await generateMontageberichtPdfBuffer(fixturePayload(), { lang: 'en' });
+  const enPages = await loadPdfPages(enBytes);
+  assertSectionOrder(enPages, {
+    grund: 'Purpose of visit',
+    remarks: 'Remarks',
+    empf: 'Recommendations',
+  });
+  console.log('OK: Remarks unter Purpose of visit, Empfehlungen/Recommendations nach der FN');
 
   const pngs = await rasterPdfToPngs(pdfBytes);
   pngs.forEach((dataUrl, i) => {

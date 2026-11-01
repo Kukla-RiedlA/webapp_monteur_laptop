@@ -73,6 +73,21 @@ body.has-sticky-header .kw-wiegung-table-wrap thead th {
   table-layout: fixed;
 }
 
+.proto-unit-select {
+  display: block;
+  width: 100%;
+  max-width: 4.8rem;
+  margin-top: 0.22rem;
+  height: 26px;
+  padding: 0 0.15rem;
+  border: 1px solid var(--sp-border, #d8e3df);
+  border-radius: 6px;
+  background: #fff;
+  color: #0c6a4d;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 .kw-wiegung-table thead th {
   background: var(--sp-mint, #eefaf5);
   color: var(--sp-text, #111827);

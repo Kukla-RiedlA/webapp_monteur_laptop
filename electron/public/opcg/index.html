@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPCG Schulung</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #1c2430; color: #e8eef6; font-family: Arial, Helvetica, sans-serif; }
+  body { display: flex; min-height: 100%; }
+  aside { width: 320px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 14px; background: #121820; border-right: 1px solid #2c3848; }
+  aside h1 { margin: 0; font-size: 18px; }
+  aside p { margin: 0; font-size: 12px; line-height: 1.4; color: #b7c3d4; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #b7c3d4; }
+  input, select, button { font: inherit; }
+  input, select { background: #0e141c; color: #e8eef6; border: 1px solid #3d4d63; border-radius: 4px; padding: 6px 8px; }
+  .row { display: flex; gap: 6px; }
+  .row button, #reset { background: #243044; color: #e8eef6; border: 1px solid #3d4d63; border-radius: 4px; padding: 6px 8px; cursor: pointer; }
+  .row button { flex: 1; }
+  #list { overflow: auto; flex: 1; border: 1px solid #2c3848; border-radius: 6px; background: #0e141c; }
+  #list button { display: block; width: 100%; text-align: left; background: transparent; color: #d5deea; border: 0; border-bottom: 1px solid #1d2836; padding: 6px 8px; cursor: pointer; font-size: 12px; }
+  #list button.on { background: #2a4468; color: white; }
+  #list button.skip { opacity: .4; }
+  #list h2 { margin: 8px 8px 4px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: #8ea0b8; }
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; }
+  #crumb { font-size: 13px; color: #c5d2e4; min-height: 1.2em; }
+  #frame { position: relative; overflow: hidden; flex: none; box-sizing: content-box; background: #d9d9d9; border: 10px solid #4a5562; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.45), inset 0 0 0 2px #2b323b; }
+  #stage { position: absolute; left: 0; top: 0; width: 640px; height: 480px; transform-origin: 0 0; }
+  .c { position: absolute; overflow: hidden; display: flex; white-space: nowrap; line-height: 1; }
+  .c img { width: 100%; height: 100%; object-fit: fill; display: block; pointer-events: none; }
+  .c img.glyph { position: absolute; width: auto; height: auto; max-width: none; object-fit: none; }
+  .k-button, .k-hot, .k-num.in, .k-str.in, .k-edit, .k-list, .k-pass.in, .k-time.in, .k-drop { cursor: pointer; }
+  .bar { position: absolute; }
+  .opt { padding: 2px 6px; cursor: pointer; white-space: nowrap; }
+  .opt.on { background: #8eb0dc; }
+  #pop { position: fixed; z-index: 20; max-height: 240px; overflow: auto; background: #f4f4f4; color: #111; border: 1px solid #666; box-shadow: 0 8px 24px rgba(0,0,0,.35); font-family: Arial, sans-serif; }
+  #pad { position: fixed; z-index: 30; left: 50%; top: 50%; transform: translate(-50%, -50%); background: #d9d9d9; color: #111; border: 2px solid #444; border-radius: 8px; padding: 12px; width: 280px; box-shadow: 0 16px 40px rgba(0,0,0,.4); }
+  #pad input { width: 100%; font-size: 22px; margin-bottom: 8px; color: #111; background: white; }
+  #pad .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  #pad button { font-size: 18px; padding: 10px 0; border: 1px solid #888; background: #f7f7f7; border-radius: 4px; cursor: pointer; }
+  #pad .wide { grid-column: span 3; background: #2a4468; color: white; border-color: #2a4468; }
+  body.bild aside, body.bild #crumb { display: none; }
+  body.bild { background: #1c2430; }
+  body.bild main { padding: 8px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>OPCG Schulung</h1>
+  <p>Bedienbare Nachbildung der Visu OPCG, 640×480. Keine Verbindung zur Steuerung, Eingaben bleiben in diesem Browser.</p>
+  <p>Bildlauf und Parameterübersicht folgen VisuCtrl und dem Seitenhandler. Waagenart und Steuerung bestimmen, welche Seiten die Pfeiltasten anspringen. Blass markierte Seiten überspringt der Bildlauf.</p>
+  <div class="row">
+    <button type="button" id="back">Zurück</button>
+    <button type="button" id="overview">Übersicht</button>
+    <button type="button" id="graphic">Grafik</button>
+  </div>
+  <label>Sprache
+    <select id="lang"><option value="de">Deutsch</option><option value="en">English</option></select>
+  </label>
+  <label>Waagenart
+    <select id="waage">
+      <option value="0">Bandwaage</option>
+      <option value="1">Dosierbandwaage</option>
+      <option value="2">Schüttstrommesser</option>
+      <option value="3">Differentialdosierwaage</option>
+      <option value="4">Rohrförderschnecke</option>
+    </select>
+  </label>
+  <label>Steuerung
+    <select id="hw">
+      <option value="1">SGC</option>
+      <option value="2">SG4 V2.20</option>
+      <option value="3">SG4 V2.30</option>
+      <option value="5">SG4 V3.00</option>
+    </select>
+  </label>
+  <label>Seite suchen
+    <input id="find" placeholder="Name oder Nummer" autocomplete="off">
+  </label>
+  <div id="list"></div>
+  <button type="button" id="reset">Werte zurücksetzen</button>
+</aside>
+<main>
+  <div id="crumb"></div>
+  <div id="frame"><div id="stage"></div></div>
+</main>
+<script src="visu-data.js?v=23"></script>
+<script src="app.js?v=40"></script>
+</body>
+</html>

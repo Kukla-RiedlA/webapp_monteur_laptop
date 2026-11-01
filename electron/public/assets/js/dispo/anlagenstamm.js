@@ -301,6 +301,34 @@ function applyExtrasMapsToTable(pnMap, tedMap, onlyFabSet) {
   }
 }
 
+function mergeFilledExtrasMaps(local, remote) {
+  var pn = Object.assign({}, local && local.pnMap ? local.pnMap : {});
+  var ted = Object.assign({}, local && local.tedMap ? local.tedMap : {});
+  var remotePn = remote && remote.pnMap ? remote.pnMap : {};
+  var remoteTed = remote && remote.tedMap ? remote.tedMap : {};
+  Object.keys(remotePn).forEach(function (fab) {
+    var v = String(remotePn[fab] || '').trim();
+    if (v) pn[fab] = v;
+  });
+  Object.keys(remoteTed).forEach(function (fab) {
+    var list = remoteTed[fab];
+    if (Array.isArray(list) && list.length) ted[fab] = list;
+  });
+  return { pnMap: pn, tedMap: ted };
+}
+
+function parseAnlagenExtrasPayload(text) {
+  var s = String(text || '').replace(/^\uFEFF/, '').trim();
+  if (s.charAt(0) === '<') throw new Error('extras html not json');
+  var data = JSON.parse(s);
+  if (!data || !data.success) throw new Error('extras not success');
+  return {
+    pnMap: normalizeFabKeyedMap(data.pn_by_fab),
+    tedMap: normalizeFabKeyedMap(data.ted_by_fab),
+    needsFill: Array.isArray(data.needs_fill) ? data.needs_fill : []
+  };
+}
+
 function fetchAnlagenTableExtrasChunk(fabChunk) {
   return fetch(anlagenstammApiUrl('api/anlagenstamm_list_extras.php'), {
     method: 'POST',
@@ -313,15 +341,27 @@ function fetchAnlagenTableExtrasChunk(fabChunk) {
       if (!r.ok) throw new Error('extras http ' + r.status);
       return r.text();
     })
-    .then(function (text) {
-      var s = String(text || '').replace(/^\uFEFF/, '').trim();
-      if (s.charAt(0) === '<') throw new Error('extras html not json');
-      var data = JSON.parse(s);
-      if (!data || !data.success) throw new Error('extras not success');
-      return {
-        pnMap: normalizeFabKeyedMap(data.pn_by_fab),
-        tedMap: normalizeFabKeyedMap(data.ted_by_fab)
-      };
+    .then(parseAnlagenExtrasPayload)
+    .then(function (local) {
+      if (!window.KUKLA_MONTEUR_LAPTOP || !local.needsFill || !local.needsFill.length) return local;
+      var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 40000) : null;
+      return fetch(anlagenstammApiUrl('api/anlagenstamm_extras_fill.php'), {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fabs: local.needsFill }),
+        signal: ctrl ? ctrl.signal : undefined
+      })
+        .then(function (r) {
+          if (!r.ok) return local;
+          return r.text().then(function (text) {
+            return mergeFilledExtrasMaps(local, parseAnlagenExtrasPayload(text));
+          });
+        })
+        .catch(function () { return local; })
+        .finally(function () { if (timer) clearTimeout(timer); });
     });
 }
 

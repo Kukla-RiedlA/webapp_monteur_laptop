@@ -10201,6 +10201,9 @@
       monteurApp.openExternal(d.url);
     }
   });
+  var shellLoops = (window.KuklaShellLoops && typeof window.KuklaShellLoops.shellLoopsForSearch === 'function')
+    ? window.KuklaShellLoops.shellLoopsForSearch(window.location.search)
+    : { bootSync: true, syncInterval: true, connectionProbe: true, onlineSync: true, jobPoll: true };
   bootstrapLocalData(false)
     .then(function () {
       return applyFixedDispoTlsOnServer();
@@ -10213,6 +10216,7 @@
     })
     .then(function () {
       syncUpdateFeedToMain();
+      if (!shellLoops.bootSync) return;
       return checkConnectionAndSync({ blockingSync: false });
     })
     .then(function () {
@@ -10224,11 +10228,11 @@
     .catch(function () {
       startPushEvents();
     });
-  startSyncInterval();
-  startConnectionProbeInterval();
-  startBackgroundJobsPollingUi();
+  if (shellLoops.syncInterval) startSyncInterval();
+  if (shellLoops.connectionProbe) startConnectionProbeInterval();
+  if (shellLoops.jobPoll) startBackgroundJobsPollingUi();
   window.addEventListener('online', function () {
-    if (typeof checkConnectionAndSync === 'function') {
+    if (shellLoops.onlineSync && typeof checkConnectionAndSync === 'function') {
       try { checkConnectionAndSync({ blockingSync: false }); } catch (e) { /* ignore */ }
     }
     scheduleAutoAppUpdateCheck();
@@ -10238,6 +10242,7 @@
     setConnectionBadge('offline', 'Keine Netzwerkverbindung — lokale Daten verfügbar');
   });
   document.addEventListener('visibilitychange', function () {
+    if (!shellLoops.connectionProbe) return;
     if (document.visibilityState === 'visible') {
       probeConnectionOnly();
     }
@@ -14239,7 +14244,7 @@
     else if (name === 'archiv') targetId = 'btnViewArchiv';
     else if (name === 'anlagenstamm') targetId = 'btnViewAnlagenstamm';
     else if (name === 'einstellungen') targetId = 'btnViewEinstellungen';
-    else if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'tools-csvlog' || name === 'protokolle-parameterlisten') targetId = 'btnViewTools';
+    else if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'tools-csvlog' || name === 'tools-opcg' || name === 'protokolle-parameterlisten') targetId = 'btnViewTools';
     else if (name && String(name).indexOf('protokolle-') === 0) targetId = 'btnViewProtokolle';
     else if (officeNames[name]) targetId = 'btnViewOffice';
     var t = targetId && document.getElementById(targetId);
@@ -14343,7 +14348,7 @@
     const viewArchiv = document.getElementById('viewArchiv');
     const viewAbwesenheiten = document.getElementById('viewAbwesenheiten');
     const viewAnlagenstamm = document.getElementById('viewAnlagenstamm');
-    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService', 'viewProtokolleSchulung', 'viewCsvLog'];
+    const protokolleViewIds = ['viewProtokolleArbeitsnachweis', 'viewProtokolleMontagebericht', 'viewProtokolleParameterlisten', 'viewProtokolleKontrollwiegungen', 'viewProtokolleSchleppketten', 'viewProtokollePruefzertifikat', 'viewProtokolleInbetriebnahme', 'viewProtokolleKunden', 'viewProtokolleService', 'viewProtokolleSchulung', 'viewCsvLog', 'viewOpcg'];
     viewStart.classList.remove('only-left', 'only-right', 'hidden');
     viewEinstellungen.classList.remove('active');
     if (viewProjektdaten) viewProjektdaten.classList.remove('active');
@@ -14413,7 +14418,7 @@
       }
       return;
     }
-    if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'tools-csvlog' || (name && name.startsWith('protokolle-'))) {
+    if (name === 'tools-kuklink' || name === 'tools-parameterliste' || name === 'tools-profinet' || name === 'tools-vnc' || name === 'tools-ftp' || name === 'tools-csvlog' || name === 'tools-opcg' || (name && name.startsWith('protokolle-'))) {
       viewStart.classList.add('hidden');
       const map = {
         'tools-kuklink': 'viewProtokolleParameterlisten',
@@ -14422,6 +14427,7 @@
         'tools-vnc': 'viewProtokolleParameterlisten',
         'tools-ftp': 'viewProtokolleParameterlisten',
         'tools-csvlog': 'viewCsvLog',
+        'tools-opcg': 'viewOpcg',
         'protokolle-arbeitsnachweis': 'viewProtokolleArbeitsnachweis',
         'protokolle-montagebericht': 'viewProtokolleMontagebericht',
         'protokolle-parameterlisten': 'viewProtokolleParameterlisten',
@@ -14437,6 +14443,7 @@
       if (viewId) {
         const el = document.getElementById(viewId);
         if (el) el.classList.add('active');
+        if (typeof window.kuklaRefreshProtocolViews === 'function') window.kuklaRefreshProtocolViews();
       }
       if (name === 'protokolle-arbeitsnachweis' && typeof window.openAndResetArbeitsnachweisForm === 'function') {
         window.openAndResetArbeitsnachweisForm();
@@ -14458,6 +14465,9 @@
       }
       if (name === 'tools-csvlog' && typeof window.openCsvLogTool === 'function') {
         window.openCsvLogTool();
+      }
+      if (name === 'tools-opcg' && window.OpcgTool) {
+        window.OpcgTool.openFresh(document.getElementById('viewOpcg'));
       }
       if (name === 'tools-vnc' && typeof window.openVncTool === 'function') {
         window.openVncTool();
@@ -19565,6 +19575,8 @@
       if (grundInput) setRichEditorHtml(grundInput, '');
       var bemerkEl = document.getElementById('montageberichtBemerkungen');
       if (bemerkEl) setRichEditorHtml(bemerkEl, '');
+      var empfResetEl = document.getElementById('montageberichtEmpfehlungen');
+      if (empfResetEl) setRichEditorHtml(empfResetEl, '');
       setMontageberichtLanguages(['de']);
       var projEl = document.getElementById('montageberichtProjekt');
       if (projEl) projEl.value = '';
@@ -19630,6 +19642,15 @@
               if (grundInput) setRichEditorHtml(grundInput, d.grundDesEinsatzes_html || d.grundDesEinsatzes || '', { fast: true });
               var bemerkEl = document.getElementById('montageberichtBemerkungen');
               if (bemerkEl) setRichEditorHtml(bemerkEl, d.bemerkungen_html || ((d.bemerkungen != null && d.bemerkungen !== '') ? d.bemerkungen : ''), { fast: true });
+              var empfEl = document.getElementById('montageberichtEmpfehlungen');
+              if (empfEl) {
+                var empfFromKopf = d.kopfdaten && typeof d.kopfdaten === 'object' ? d.kopfdaten : {};
+                setRichEditorHtml(
+                  empfEl,
+                  d.empfehlungen_html || empfFromKopf.empfehlungen_html || ((d.empfehlungen != null && d.empfehlungen !== '') ? d.empfehlungen : (empfFromKopf.empfehlungen || '')),
+                  { fast: true }
+                );
+              }
               setMontageberichtLanguages(
                 (Array.isArray(d.languages) && d.languages.length)
                   ? d.languages
@@ -19880,6 +19901,13 @@
       var bemerkungenValHtml = bemerkungenEl
         ? (light ? String(bemerkungenEl.innerHTML || '') : getRichEditorHtml(bemerkungenEl))
         : '';
+      var empfehlungenEl = document.getElementById('montageberichtEmpfehlungen');
+      var empfehlungenVal = empfehlungenEl
+        ? (light ? String(empfehlungenEl.textContent || '') : getRichEditorPlain(empfehlungenEl))
+        : '';
+      var empfehlungenValHtml = empfehlungenEl
+        ? (light ? String(empfehlungenEl.innerHTML || '') : getRichEditorHtml(empfehlungenEl))
+        : '';
       var grundVal = grundInput
         ? (light ? String(grundInput.textContent || '') : getRichEditorPlain(grundInput))
         : '';
@@ -19900,13 +19928,17 @@
         geliefertUeber: geliefertUeberVal,
         fabrikationsnummern: fabWithDetails,
         bemerkungen: bemerkungenVal,
-        bemerkungen_html: bemerkungenValHtml
+        bemerkungen_html: bemerkungenValHtml,
+        empfehlungen: empfehlungenVal,
+        empfehlungen_html: empfehlungenValHtml
       };
       return {
         fabBemerkungen: fabBemerkungen,
         kopfdaten: kopfdaten,
         grundVal: grundVal,
         grundValHtml: grundValHtml,
+        empfehlungenVal: empfehlungenVal,
+        empfehlungenValHtml: empfehlungenValHtml,
         projektVal: projektVal,
         languages: getMontageberichtLanguages()
       };
@@ -19929,6 +19961,8 @@
         fabBemerkungen: fields.fabBemerkungen,
         grundDesEinsatzes: fields.grundVal,
         grundDesEinsatzes_html: fields.grundValHtml,
+        empfehlungen: fields.empfehlungenVal,
+        empfehlungen_html: fields.empfehlungenValHtml,
         freitext: '',
         jsonOnly: true,
         local_only: true,
@@ -20002,6 +20036,8 @@
           fabBemerkungen: fields.fabBemerkungen,
           grundDesEinsatzes: fields.grundVal,
           grundDesEinsatzes_html: fields.grundValHtml,
+          empfehlungen: fields.empfehlungenVal,
+          empfehlungen_html: fields.empfehlungenValHtml,
           freitext: '',
           jsonOnly: jsonOnly,
           dispoBaseUrl: getDispoBaseUrl(),
@@ -20281,6 +20317,42 @@
         };
       }
   
+      function kwMassUnit(value) {
+        return value === 't' || value === 'g' ? value : 'kg';
+      }
+      function kwRateUnit(value) {
+        return value === 'kg/h' ? 'kg/h' : 't/h';
+      }
+      function kwUnitFactor(kind, fromU, toU) {
+        var table = kind === 'rate'
+          ? { 't/h': 1, 'kg/h': 0.001 }
+          : { t: 1000, kg: 1, g: 0.001 };
+        var a = table[fromU];
+        var b = table[toU];
+        if (!a || !b) return 1;
+        return a / b;
+      }
+      function scaleAmount(raw, factor) {
+        if (factor === 1) return raw == null ? '' : String(raw);
+        var n = parseNumInput(raw);
+        if (n == null) return raw == null ? '' : String(raw);
+        var v = Math.round(n * factor * 1e6) / 1e6;
+        var text = String(v);
+        if (String(raw).indexOf(',') >= 0) text = text.replace('.', ',');
+        return text;
+      }
+      function readKwUnit(kind, fallback) {
+        var sel = document.querySelector('#kontrollwiegungForm select[data-kw-unit="' + kind + '"]');
+        if (!sel) return fallback;
+        return kind === 'rate' ? kwRateUnit(sel.value) : kwMassUnit(sel.value);
+      }
+      function setKwUnit(kind, value) {
+        var v = kind === 'rate' ? kwRateUnit(value) : kwMassUnit(value);
+        document.querySelectorAll('#kontrollwiegungForm select[data-kw-unit="' + kind + '"]').forEach(function (sel) {
+          sel.value = v;
+          sel.dataset.prev = v;
+        });
+      }
       function emptyWiegung() {
         return {
           bandwaage_kg: '',
@@ -20308,6 +20380,8 @@
           teilung_kontrollwaage: teilungEl ? String(teilungEl.value || '').trim() : '',
           bereich_max: bereichMaxEl ? String(bereichMaxEl.value || '').trim() : '',
           letzte_eichung: letzteEichungEl ? String(letzteEichungEl.value || '').trim() : '',
+          einheit_masse: readKwUnit('masse', 'kg'),
+          einheit_leistung: readKwUnit('rate', 't/h'),
           wiegungen: wiegungen.slice(),
           languages: getProtocolLanguagesFromChecks('kontrollwiegungLangDe', 'kontrollwiegungLangEn'),
           gespeichert_am: prev.gespeichert_am || '',
@@ -20348,6 +20422,8 @@
         if (letzteEichungEl) {
           letzteEichungEl.value = draft.letzte_eichung != null ? String(draft.letzte_eichung) : '';
         }
+        setKwUnit('masse', draft.einheit_masse);
+        setKwUnit('rate', draft.einheit_leistung);
         wiegungen = Array.isArray(draft.wiegungen) && draft.wiegungen.length
           ? draft.wiegungen.map(function (w) {
               return {
@@ -21026,6 +21102,31 @@
         }
       }
   
+      document.querySelectorAll('#kontrollwiegungForm select[data-kw-unit]').forEach(function (sel) {
+        sel.dataset.prev = sel.value;
+        sel.addEventListener('change', function () {
+          var kind = sel.getAttribute('data-kw-unit') === 'rate' ? 'rate' : 'masse';
+          var prev = kind === 'rate' ? kwRateUnit(sel.dataset.prev) : kwMassUnit(sel.dataset.prev);
+          var next = kind === 'rate' ? kwRateUnit(sel.value) : kwMassUnit(sel.value);
+          setKwUnit(kind, next);
+          if (prev !== next) {
+            syncWiegungenFromDom();
+            var factor = kwUnitFactor(kind, prev, next);
+            wiegungen = wiegungen.map(function (row) {
+              var nextRow = Object.assign({}, row);
+              if (kind === 'rate') {
+                nextRow.leistung_th = scaleAmount(row.leistung_th, factor);
+              } else {
+                ['bandwaage_kg', 'kontrollwaage_kg', 'tara_kg', 'brutto_kg', 'fehler_kg'].forEach(function (k) {
+                  nextRow[k] = scaleAmount(row[k], factor);
+                });
+              }
+              return nextRow;
+            });
+            renderZeilen();
+          }
+        });
+      });
       if (addRowBtn) addRowBtn.addEventListener('click', addRow);
       if (abbrechenBtn) abbrechenBtn.addEventListener('click', function () {
         if (typeof showView === 'function') showView('start');
@@ -21075,6 +21176,8 @@
           teilung_kontrollwaage: draft.teilung_kontrollwaage,
           bereich_max: draft.bereich_max,
           letzte_eichung: draft.letzte_eichung,
+          einheit_masse: draft.einheit_masse,
+          einheit_leistung: draft.einheit_leistung,
           wiegungen: wiegungen,
           languages: langsKw.length ? langsKw : (draft.languages || ['de']),
           pdf_languages: langsKw.length ? langsKw : (draft.languages || ['de']),
@@ -21479,19 +21582,58 @@
       if (legacy && draft[legacy] != null && String(draft[legacy]).trim() !== '') return String(draft[legacy]).trim();
       return '';
     }
+    function skMassUnit(value) {
+      return value === 'kg' || value === 'g' ? value : 't';
+    }
+    function skRateUnit(value) {
+      return value === 'kg/h' ? 'kg/h' : 't/h';
+    }
+    function skUnitFactor(kind, fromU, toU) {
+      var table = kind === 'rate'
+        ? { 't/h': 1, 'kg/h': 0.001 }
+        : { t: 1000, kg: 1, g: 0.001 };
+      var a = table[fromU];
+      var b = table[toU];
+      if (!a || !b) return 1;
+      return a / b;
+    }
+    function scaleSkAmount(raw, factor) {
+      if (factor === 1) return raw == null ? '' : String(raw);
+      var n = parseNumInput(raw);
+      if (n == null) return raw == null ? '' : String(raw);
+      var v = Math.round(n * factor * 1e6) / 1e6;
+      var text = String(v);
+      if (String(raw).indexOf(',') >= 0) text = text.replace('.', ',');
+      return text;
+    }
+    function readSkUnit(kind, fallback) {
+      var sel = document.querySelector('#schleppkettenForm select[data-sk-unit="' + kind + '"]');
+      if (!sel) return fallback;
+      return kind === 'rate' ? skRateUnit(sel.value) : skMassUnit(sel.value);
+    }
+    function setSkUnit(kind, value) {
+      var v = kind === 'rate' ? skRateUnit(value) : skMassUnit(value);
+      document.querySelectorAll('#schleppkettenForm select[data-sk-unit="' + kind + '"]').forEach(function (sel) {
+        sel.value = v;
+        sel.dataset.prev = v;
+      });
+    }
     function computeRow(row) {
       var band = parseNumInput(row.bandwaage_t);
       var kgm = parseNumInput(row.kg_pro_m);
       var geschw = parseNumInput(row.geschwindigkeit_ms);
       var messzeit = parseNumInput(row.messzeit_s);
+      var massU = readSkUnit('masse', 't');
+      var rateU = readSkUnit('rate', 't/h');
       row.pruefkette_t = '';
       row.fehler_prozent = '';
       row.leistung_th = '';
       if (messzeit != null && messzeit >= 1 && kgm != null && geschw != null) {
-        var pk = (kgm * geschw * messzeit) / 1000;
-        row.pruefkette_t = formatNum(pk, 4);
+        var pkT = (kgm * geschw * messzeit) / 1000;
+        var pk = pkT * skUnitFactor('masse', 't', massU);
+        row.pruefkette_t = formatNum(pk, massU === 'g' ? 0 : 4);
         if (band != null && pk !== 0) row.fehler_prozent = formatPct(((band - pk) / pk) * 100);
-        row.leistung_th = formatNum((pk / messzeit) * 3600, 1);
+        row.leistung_th = formatNum(pkT / messzeit * 3600 * skUnitFactor('rate', 't/h', rateU), rateU === 'kg/h' ? 0 : 1);
       }
       return row;
     }
@@ -21622,6 +21764,8 @@
         gewicht_pro_kette: kettenSum.gewicht_pro_kette,
         gewicht_pro_meter: kettenSum.gewicht_pro_meter,
         messungen: messungen.slice(),
+        einheit_masse: readSkUnit('masse', 't'),
+        einheit_leistung: readSkUnit('rate', 't/h'),
         languages: getProtocolLanguagesFromChecks('schleppkettenLangDe', 'schleppkettenLangEn'),
         gespeichert_am: prev.gespeichert_am || '',
         updated_at: prev.updated_at || '',
@@ -21658,6 +21802,8 @@
         var monteurDraft = draft.monteur_name != null ? String(draft.monteur_name).trim() : '';
         monteurEl.value = monteurDraft || defaultMonteurName();
       }
+      setSkUnit('masse', draft.einheit_masse);
+      setSkUnit('rate', draft.einheit_leistung);
       ketten = normalizeKettenList(draft.ketten, draft);
       renderKettenRows();
       messungen = Array.isArray(draft.messungen) && draft.messungen.length
@@ -22361,6 +22507,28 @@
         renderKettenRows();
       });
     }
+    document.querySelectorAll('#schleppkettenForm select[data-sk-unit]').forEach(function (sel) {
+      sel.dataset.prev = sel.value;
+      sel.addEventListener('change', function () {
+        var kind = sel.getAttribute('data-sk-unit') === 'rate' ? 'rate' : 'masse';
+        var prev = kind === 'rate' ? skRateUnit(sel.dataset.prev) : skMassUnit(sel.dataset.prev);
+        var next = kind === 'rate' ? skRateUnit(sel.value) : skMassUnit(sel.value);
+        setSkUnit(kind, next);
+        if (kind === 'masse' && prev !== next) {
+          var factor = skUnitFactor('masse', prev, next);
+          if (zeilenContainer) {
+            zeilenContainer.querySelectorAll('input[name="bandwaage_t"]').forEach(function (inp) {
+              inp.value = scaleSkAmount(inp.value, factor);
+            });
+          }
+        }
+        if (zeilenContainer) {
+          zeilenContainer.querySelectorAll('.schleppketten-row').forEach(function (rowEl) {
+            updateRowCalc(rowEl);
+          });
+        }
+      });
+    });
     if (addRowBtn) {
       addRowBtn.addEventListener('click', function () {
         syncMessungenFromDom();
@@ -23569,6 +23737,16 @@
       });
     }
     var spWiegungen = [emptySpWiegung()];
+    var spEinheitMasse = 'kg';
+    var spEinheitLeistung = 't/h';
+    var spEinheitKette = 't';
+    var spEinheitKetteLeistung = 't/h';
+    function normSpMass(value, fallback) {
+      return value === 't' || value === 'kg' || value === 'g' ? value : (fallback || 'kg');
+    }
+    function normSpRate(value, fallback) {
+      return value === 't/h' || value === 'kg/h' ? value : (fallback || 't/h');
+    }
     function emptySpKette() {
       return { tag: '', ketten_type: '', laenge: '', gewicht_pro_kette: '', gewicht_pro_meter: '', in_summe: true };
     }
@@ -24892,6 +25070,10 @@
         languages: collectPdfLanguages(),
         pdf_languages: collectPdfLanguages(),
         motoren: Array.isArray(cached.motoren) ? cached.motoren : [],
+        einheit_masse: normSpMass(cached.einheit_masse, 'kg'),
+        einheit_leistung: normSpRate(cached.einheit_leistung, 't/h'),
+        einheit_kette: normSpMass(cached.einheit_kette, 't'),
+        einheit_kette_leistung: normSpRate(cached.einheit_kette_leistung, 't/h'),
         include_in_pdf: isFabIncluded(cached)
       };
     }
@@ -24945,6 +25127,10 @@
         wiegungen: normalizeSpWiegungen(spWiegungen),
         ketten: normalizeSpKetten(spKetten),
         ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen),
+        einheit_masse: spEinheitMasse,
+        einheit_leistung: spEinheitLeistung,
+        einheit_kette: spEinheitKette,
+        einheit_kette_leistung: spEinheitKetteLeistung,
         include_in_pdf: isFabIncluded(cached)
       };
     }
@@ -24992,6 +25178,10 @@
         abschluss: payload.abschluss || { status: 'geprueft' },
         motoren: payload.motoren || [],
         wiegungen: normalizeSpWiegungen(payload.wiegungen || (payload.messwerte && payload.messwerte.wiegungen)),
+        einheit_masse: normSpMass(payload.einheit_masse, 'kg'),
+        einheit_leistung: normSpRate(payload.einheit_leistung, 't/h'),
+        einheit_kette: normSpMass(payload.einheit_kette, 't'),
+        einheit_kette_leistung: normSpRate(payload.einheit_kette_leistung, 't/h'),
         ketten: spKettenFromSource(payload),
         ketten_messungen: spKettenMessungenFromSource(payload),
         languages: collectPdfLanguages(),
@@ -25117,6 +25307,10 @@
           kopf_dwc: (draft && draft.kopf_dwc) || '',
           motoren: (draft && Array.isArray(draft.motoren)) ? draft.motoren : [],
           wiegungen: normalizeSpWiegungen((draft && draft.wiegungen) || (draft && draft.messwerte && draft.messwerte.wiegungen)),
+          einheit_masse: normSpMass(draft && draft.einheit_masse, 'kg'),
+          einheit_leistung: normSpRate(draft && draft.einheit_leistung, 't/h'),
+          einheit_kette: normSpMass(draft && draft.einheit_kette, 't'),
+          einheit_kette_leistung: normSpRate(draft && draft.einheit_kette_leistung, 't/h'),
           ketten: spKettenFromSource(draft),
           ketten_messungen: spKettenMessungenFromSource(draft),
           abschluss: (draft && draft.abschluss != null && !Array.isArray(draft.abschluss) && typeof draft.abschluss === 'object')
@@ -25317,6 +25511,10 @@
         applyMessMatrixToForm(normalizeMessMatrix(mess));
       }
       applyPgTestToForm(normalizePgTestCells(mess));
+      spEinheitMasse = normSpMass(draft.einheit_masse, 'kg');
+      spEinheitLeistung = normSpRate(draft.einheit_leistung, 't/h');
+      spEinheitKette = normSpMass(draft.einheit_kette, 't');
+      spEinheitKetteLeistung = normSpRate(draft.einheit_kette_leistung, 't/h');
       spWiegungen = normalizeSpWiegungen(
         (Array.isArray(draft.wiegungen) && draft.wiegungen.length)
           ? draft.wiegungen
@@ -26306,7 +26504,11 @@
         mess_matrix: matrix,
         wiegungen: normalizeSpWiegungen(spWiegungen),
         ketten: normalizeSpKetten(spKetten),
-        ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen)
+        ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen),
+        einheit_masse: spEinheitMasse,
+        einheit_leistung: spEinheitLeistung,
+        einheit_kette: spEinheitKette,
+        einheit_kette_leistung: spEinheitKetteLeistung
       }, legacy);
     }
 
@@ -26476,6 +26678,10 @@
           wiegungen: normalizeSpWiegungen(spWiegungen),
           ketten: normalizeSpKetten(spKetten),
           ketten_messungen: normalizeSpKettenMessungen(spKettenMessungen),
+          einheit_masse: spEinheitMasse,
+          einheit_leistung: spEinheitLeistung,
+          einheit_kette: spEinheitKette,
+          einheit_kette_leistung: spEinheitKetteLeistung,
           signature_override_png: (abschlussPayload && abschlussPayload.signature_override_png) || '',
           jsonOnly: jsonOnly,
           local_only: (typeof preferLocalProjekteNeuOnly === 'function' && preferLocalProjekteNeuOnly()) || undefined,
@@ -26713,6 +26919,10 @@
           plantType: (document.getElementById('serviceprotokollType') || {}).value || '',
           qmax: clampServiceprotokollQmax((document.getElementById('serviceprotokollQmax') || {}).value || ''),
           qmaxUnit: 'kg/h',
+          wiegungMasseUnit: spEinheitMasse,
+          wiegungRateUnit: spEinheitLeistung,
+          ketteMasseUnit: spEinheitKette,
+          ketteRateUnit: spEinheitKetteLeistung,
           vmax: (document.getElementById('serviceprotokollVmax') || {}).value || '',
           position: (document.getElementById('serviceprotokollPos') || {}).value || '',
           dwc: (document.getElementById('serviceprotokollDwc') || {}).value || '',
@@ -26885,6 +27095,10 @@
         var tl = payload.testLoad;
         applyPgTestToForm([tl.weight || '', tl.display || '', tl.deviation || '', tl.value4 || '']);
       }
+      if (f.wiegungMasseUnit) spEinheitMasse = normSpMass(f.wiegungMasseUnit, 'kg');
+      if (f.wiegungRateUnit) spEinheitLeistung = normSpRate(f.wiegungRateUnit, 't/h');
+      if (f.ketteMasseUnit) spEinheitKette = normSpMass(f.ketteMasseUnit, 't');
+      if (f.ketteRateUnit) spEinheitKetteLeistung = normSpRate(f.ketteRateUnit, 't/h');
       if (Array.isArray(payload.wiegungen)) {
         spWiegungen = normalizeSpWiegungen(payload.wiegungen);
       }

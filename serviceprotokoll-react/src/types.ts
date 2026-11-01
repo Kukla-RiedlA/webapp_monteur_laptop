@@ -253,6 +253,14 @@ export interface ServiceProtocolFormState {
   closingRemarks: string;
   pdfDe: boolean;
   pdfEn: boolean;
+  /** Masseinheit der Kontrollwiegungen: t, kg oder g. */
+  wiegungMasseUnit: string;
+  /** Leistungseinheit der Kontrollwiegungen: t/h oder kg/h. */
+  wiegungRateUnit: string;
+  /** Masseinheit der Schleppketten-Messungen: t, kg oder g. */
+  ketteMasseUnit: string;
+  /** Leistungseinheit der Schleppketten-Messungen: t/h oder kg/h. */
+  ketteRateUnit: string;
 }
 
 export const FAB_NUMBERS = ['7118', '7119', '7120', '7123', '10612', '10616', '12435'];
@@ -336,6 +344,10 @@ export const DEFAULT_FORM: ServiceProtocolFormState = {
   closingRemarks: '',
   pdfDe: true,
   pdfEn: false,
+  wiegungMasseUnit: 'kg',
+  wiegungRateUnit: 't/h',
+  ketteMasseUnit: 't',
+  ketteRateUnit: 't/h',
 };
 
 /** Leeres Formular für Auftrags-/FN-Wechsel (ohne Demo-Daten). */
@@ -370,4 +382,8 @@ export const EMPTY_FORM: ServiceProtocolFormState = {
   closingRemarks: '',
   pdfDe: true,
   pdfEn: false,
+  wiegungMasseUnit: 'kg',
+  wiegungRateUnit: 't/h',
+  ketteMasseUnit: 't',
+  ketteRateUnit: 't/h',
 };

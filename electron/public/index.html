@@ -900,6 +900,12 @@
     .kukla-rams-wizard__checklist { display: grid; gap: 0.3rem; }
     .view-protokolle { display: none; padding: 1rem; width: 100%; max-width: none; margin: 0; box-sizing: border-box; }
     .view-protokolle.active { display: block; }
+    #viewOpcg.opcg-view { display: none; padding: 0; height: 100%; }
+    #viewOpcg.opcg-view.active { display: flex; flex-direction: column; min-height: 0; }
+    #viewOpcg .opcg-tool { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; padding: 12px; box-sizing: border-box; }
+    #viewOpcg .opcg-tool-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    #viewOpcg .opcg-tool-bar h2 { margin: 0; font-size: 1.1rem; }
+    #viewOpcg .opcg-tool iframe { flex: 1 1 auto; min-height: 420px; width: 100%; border: 0; background: #1c2430; }
     .view-protokolle-sub { display: none; }
     .view-protokolle-sub.active { display: block; }
     #viewProtokolleParameterlisten .card {
@@ -2726,6 +2732,7 @@
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-vnc">VNC</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-ftp">FTP</button>
           <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-csvlog">CSV-Log</button>
+          <button type="button" class="toolbar-dropdown-item nav-drop-item" role="menuitem" data-view="tools-opcg">OP-G Simulation</button>
         </div>
       </div>
       <button type="button" class="nav-item" id="btnViewAnlagenstamm">
@@ -3642,7 +3649,17 @@
             </section>
 
             <section class="sp-v2-section" aria-labelledby="mbV2Sec4Title">
-              <header class="sp-v2-section-head" id="mbV2Sec4Title" data-i18n-en="Save"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
+              <header class="sp-v2-section-head" id="mbV2Sec4Title" data-i18n-en="Recommendations"><span class="sp-v2-num">4</span><img class="sp-v2-icon" src="icons/clipboard-check-green.svg" alt="" aria-hidden="true"> Empfehlungen</header>
+              <div class="sp-v2-section-body">
+                <div class="sp-v2-field">
+                  <label for="montageberichtEmpfehlungen">Empfehlungen</label>
+                  <div id="montageberichtEmpfehlungen" class="mb-rich-editor" data-mb-editor="empfehlungen" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true"></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="sp-v2-section" aria-labelledby="mbV2Sec5Title">
+              <header class="sp-v2-section-head" id="mbV2Sec5Title" data-i18n-en="Save"><span class="sp-v2-num">5</span><img class="sp-v2-icon" src="icons/save-green.svg" alt="" aria-hidden="true"> Speichern</header>
               <div class="sp-v2-section-body">
                 <div class="mb-v2-actions-row">
                   <button type="submit" class="btn btn-primary" id="btnMontageberichtSaveJson" title="Nur Daten speichern">Speichern</button>
@@ -3972,6 +3989,23 @@
       </div>
     </div>
   </main>
+  <main id="viewOpcg" class="opcg-view" aria-label="OP-G Simulation">
+    <div class="opcg-tool">
+      <div class="opcg-tool-bar">
+        <h2>OP-G Simulation</h2>
+        <button type="button" class="btn btn-primary" data-opcg-choose="0">Lade Waage 1</button>
+        <span data-opcg-slot="0"></span>
+        <button type="button" class="btn btn-primary" data-opcg-choose="1">Lade Waage 2</button>
+        <span data-opcg-slot="1"></span>
+        <button type="button" class="btn btn-primary" data-opcg-choose="2">Lade Waage 3</button>
+        <span data-opcg-slot="2"></span>
+        <input type="file" data-opcg-files="0" accept=".csv,.txt,.pa3,.pa4,.pa5,.pa6,.pa7" hidden>
+        <input type="file" data-opcg-files="1" accept=".csv,.txt,.pa3,.pa4,.pa5,.pa6,.pa7" hidden>
+        <input type="file" data-opcg-files="2" accept=".csv,.txt,.pa3,.pa4,.pa5,.pa6,.pa7" hidden>
+      </div>
+      <iframe data-opcg-frame title="OP-G Simulation" src="opcg/index.html?bild=1"></iframe>
+    </div>
+  </main>
   <main id="viewCsvLog" class="view-protokolle view-protokolle-sub view-csvlog" aria-label="CSV-Log">
     <div class="csvlog">
       <div class="csvlog-head">
@@ -4102,13 +4136,13 @@
                   <thead>
                     <tr>
                       <th class="kw-col-nr">#</th>
-                      <th class="kw-col-num" data-i18n-en="Belt scale [kg]">Bandwaage [kg]</th>
-                      <th class="kw-col-num" data-i18n-en="Control scale [kg]">Kontrollwaage [kg]</th>
-                      <th class="kw-col-num" data-i18n-en="Error [kg]">Fehler [kg]</th>
+                      <th class="kw-col-num"><span class="kw-th-label" data-i18n-en="Belt scale">Bandwaage</span><select class="proto-unit-select" data-kw-unit="masse" aria-label="Einheit Bandwaage"><option value="t">t</option><option value="kg" selected>kg</option><option value="g">g</option></select></th>
+                      <th class="kw-col-num"><span class="kw-th-label" data-i18n-en="Control scale">Kontrollwaage</span><select class="proto-unit-select" data-kw-unit="masse" aria-label="Einheit Kontrollwaage"><option value="t">t</option><option value="kg" selected>kg</option><option value="g">g</option></select></th>
+                      <th class="kw-col-num"><span class="kw-th-label" data-i18n-en="Error">Fehler</span><select class="proto-unit-select" data-kw-unit="masse" aria-label="Einheit Fehler"><option value="t">t</option><option value="kg" selected>kg</option><option value="g">g</option></select></th>
                       <th class="kw-col-num" data-i18n-en="Error [%]">Fehler [%]</th>
-                      <th class="kw-col-num" data-i18n-en="Capacity [t/h]">Leistung [t/h]</th>
-                      <th class="kw-col-num" data-i18n-en="Tare [kg]">Tara [kg]</th>
-                      <th class="kw-col-num" data-i18n-en="Gross [kg]">Brutto [kg]</th>
+                      <th class="kw-col-num"><span class="kw-th-label" data-i18n-en="Capacity">Leistung</span><select class="proto-unit-select" data-kw-unit="rate" aria-label="Einheit Leistung"><option value="t/h" selected>t/h</option><option value="kg/h">kg/h</option></select></th>
+                      <th class="kw-col-num"><span class="kw-th-label" data-i18n-en="Tare">Tara</span><select class="proto-unit-select" data-kw-unit="masse" aria-label="Einheit Tara"><option value="t">t</option><option value="kg" selected>kg</option><option value="g">g</option></select></th>
+                      <th class="kw-col-num"><span class="kw-th-label" data-i18n-en="Gross">Brutto</span><select class="proto-unit-select" data-kw-unit="masse" aria-label="Einheit Brutto"><option value="t">t</option><option value="kg" selected>kg</option><option value="g">g</option></select></th>
                       <th class="kw-col-bem" data-i18n-en="Remark">Bemerkung</th>
                   <th class="kw-col-act" title="In Summe / Im PDF / Löschen" data-i18n-title-en="In total / in PDF / delete">Σ / <img class="proto-print-th-icon" src="icons/printer-green.svg" alt="" aria-hidden="true"> / ×</th>
                     </tr>
@@ -4278,13 +4312,13 @@
                 <thead>
                   <tr>
                     <th class="sk-col-nr">#</th>
-                    <th class="sk-col-num" data-i18n-en="Belt scale [t]">Bandwaage [t]</th>
-                    <th class="sk-col-num" data-i18n-en="Test chain [t]">Prüfkette [t]</th>
+                    <th class="sk-col-num"><span class="sk-th-label" data-i18n-en="Belt scale">Bandwaage</span><select class="proto-unit-select" data-sk-unit="masse" aria-label="Einheit Bandwaage"><option value="t" selected>t</option><option value="kg">kg</option><option value="g">g</option></select></th>
+                    <th class="sk-col-num"><span class="sk-th-label" data-i18n-en="Test chain">Prüfkette</span><select class="proto-unit-select" data-sk-unit="masse" aria-label="Einheit Prüfkette"><option value="t" selected>t</option><option value="kg">kg</option><option value="g">g</option></select></th>
                     <th class="sk-col-num">kg/m</th>
                     <th class="sk-col-num" data-i18n-en="Speed [m/s]">Geschw. [m/s]</th>
                     <th class="sk-col-num" data-i18n-en="Measuring time [s]">Messzeit [s]</th>
                     <th class="sk-col-num" data-i18n-en="Error [%]">Fehler [%]</th>
-                    <th class="sk-col-num" data-i18n-en="Capacity [t/h]">Leistung [t/h]</th>
+                    <th class="sk-col-num"><span class="sk-th-label" data-i18n-en="Capacity">Leistung</span><select class="proto-unit-select" data-sk-unit="rate" aria-label="Einheit Leistung"><option value="t/h" selected>t/h</option><option value="kg/h">kg/h</option></select></th>
                     <th class="sk-col-bem" data-i18n-en="Remark">Bemerkung</th>
                     <th class="sk-col-act" title="In Summe / Im PDF / Löschen" data-i18n-title-en="In total / in PDF / delete">Σ / <img class="proto-print-th-icon" src="icons/printer-green.svg" alt="" aria-hidden="true"> / ×</th>
                   </tr>
@@ -5578,6 +5612,8 @@
   <script src="js/view-zeitschreibung.js?v=20261002"></script>
   <script src="js/signature-pad.js"></script>
   <script src="js/protocol-form-i18n.js?v=schulung-en"></script>
+  <script src="js/protocol-view-watch.js"></script>
+  <script src="js/kukpit-shell-loops.js"></script>
   <script src="js/protocol-viewedit.js"></script>
   <script src="js/mb-image-draw.js"></script>
   <script src="js/arbeitsnachweis.js?v=fn7"></script>
@@ -5591,6 +5627,7 @@
   <script src="js/tools-vnc.js?v=20261014"></script>
   <script src="js/ftp-tool.js?v=20261019b"></script>
   <script src="js/csv-log-viewer.js?v=20261014"></script>
+  <script src="js/opcg-tool.js?v=20261101c"></script>
   <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261019-name"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>
   <script src="js/probe-copilot-text.js"></script>

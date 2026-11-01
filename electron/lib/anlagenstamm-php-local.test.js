@@ -216,7 +216,28 @@ describe('Anlagenstamm-Links aus lokalem Cache', () => {
     assert.equal(res.success, true);
     assert.equal(res.pn_by_fab['12346'], 'Mayrische Hochöfen AG');
     assert.equal(res.ted_by_fab['12346'][0].file_name, '12446.Pdf');
+    assert.deepEqual(res.needs_fill, []);
     assert.equal(sqls.some((s) => /SELECT[\s\S]*tree_json/.test(s)), false);
+  });
+
+  it('meldet Lücken zum Nachladen, solange TED und Ordnername fehlen', () => {
+    const db = {
+      prepare(sql) {
+        if (/FROM anlagenstamm_local/.test(sql)) {
+          return {
+            all() {
+              return [{ fabrikationsnummer: '2220', pn_root_name: '', ted_mechanik: '', extras_checked_at: null }];
+            },
+            get() { return undefined; },
+          };
+        }
+        return { all() { return []; }, get() { return undefined; }, run() {} };
+      },
+    };
+    const res = getAnlagenstammExtrasResponse(db, { fabs: ['2220'] });
+    assert.deepEqual(res.needs_fill, ['2220']);
+    assert.equal(res.pn_by_fab['2220'], '');
+    assert.deepEqual(res.ted_by_fab['2220'], []);
   });
 
   it('lädt den Ordnerbaum nur aus dem Sync-Cache', () => {
@@ -244,6 +265,8 @@ describe('Anlagenstamm-Links aus lokalem Cache', () => {
     const src = fs.readFileSync(path.join(__dirname, 'anlagenstamm-local.js'), 'utf8');
     assert.match(src, /\/api\/mobile\/anlagenstamm_sync_extras\.php/);
     assert.match(src, /function syncAnlagenstammListExtrasFromDispo/);
+    assert.match(src, /function listStaleAnlagenExtrasFabs/);
+    assert.match(src, /extras_checked_at/);
     assert.match(src, /withListExtras\(/);
   });
 });

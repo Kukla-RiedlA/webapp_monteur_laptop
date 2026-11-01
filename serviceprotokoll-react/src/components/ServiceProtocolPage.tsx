@@ -11,12 +11,13 @@ import { SignatureBox } from './SignatureBox';
 import { SpIcon } from './SpIcon';
 import { SelectInput, TextInput } from './TextInput';
 import { TestLoadFields } from './TestLoadFields';
-import { ChainTestTables, chainTestSummary } from './ChainTestTables';
-import { WeighingsTable, weighingSummary } from './WeighingsTable';
+import { ChainTestTables, chainTestSummary, recalcChainMess } from './ChainTestTables';
+import { WeighingsTable, recalcWeighing, weighingSummary } from './WeighingsTable';
 import { WorkStepsTable } from './WorkStepsTable';
 import type { ChainMessRow, ChainRow, LoadCellRow, MeasurementRow, MotorRow, ServiceProtocolFormState, StepResult, WeighingRow, WorkStep } from '../types';
 import { EMPTY_MEASUREMENTS, FAB_NUMBERS, MOTOR_FIELD_KEYS, chainMessHasData, chainRowHasData, emptyChainMessRow, emptyChainRow, emptyMotorRow, emptyWeighingRow, weighingRowHasData } from '../types';
 import { localizeAutosaveHint, maskLangFromPdf, motorFieldLabel, t, type UiLang } from '../i18n';
+import { massFactor, normMassUnit, normRateUnit, rateFactor, scaleAmount } from '../units';
 import { isFuAnlaufart } from '../motor-utils';
 
 function fieldRow(items: Array<{ label: string; value: string }>) {
@@ -89,6 +90,56 @@ export function ServiceProtocolPage() {
   }, []);
   const setChainTest = useCallback((nextChains: ChainRow[], nextMess: ChainMessRow[]) => {
     setBridgeState((prev) => mergeBridgePayload(prev, { ketten: nextChains, kettenMessungen: nextMess }));
+  }, []);
+  const setWeighingUnits = useCallback((kind: 'mass' | 'rate', next: string) => {
+    setBridgeState((prev) => {
+      const fromMass = normMassUnit(prev.form.wiegungMasseUnit, 'kg');
+      const fromRate = normRateUnit(prev.form.wiegungRateUnit, 't/h');
+      const toMass = kind === 'mass' ? normMassUnit(next, 'kg') : fromMass;
+      const toRate = kind === 'rate' ? normRateUnit(next, 't/h') : fromRate;
+      const factor = kind === 'rate' ? rateFactor(fromRate, toRate) : massFactor(fromMass, toMass);
+      const rows = (prev.wiegungen || []).map((row) =>
+        recalcWeighing(
+          kind === 'rate'
+            ? { ...row, leistung_th: scaleAmount(row.leistung_th, factor) }
+            : {
+                ...row,
+                bandwaage_kg: scaleAmount(row.bandwaage_kg, factor),
+                kontrollwaage_kg: scaleAmount(row.kontrollwaage_kg, factor),
+                tara_kg: scaleAmount(row.tara_kg, factor),
+                brutto_kg: scaleAmount(row.brutto_kg, factor),
+              },
+          false,
+        ),
+      );
+      return mergeBridgePayload(prev, {
+        wiegungen: rows,
+        form: { ...prev.form, wiegungMasseUnit: toMass, wiegungRateUnit: toRate },
+      });
+    });
+  }, []);
+  const setChainUnits = useCallback((kind: 'mass' | 'rate', next: string) => {
+    setBridgeState((prev) => {
+      const fromMass = normMassUnit(prev.form.ketteMasseUnit, 't');
+      const fromRate = normRateUnit(prev.form.ketteRateUnit, 't/h');
+      const toMass = kind === 'mass' ? normMassUnit(next, 't') : fromMass;
+      const toRate = kind === 'rate' ? normRateUnit(next, 't/h') : fromRate;
+      const factor = massFactor(fromMass, toMass);
+      const mess = (prev.kettenMessungen || []).map((row) =>
+        recalcChainMess(
+          {
+            ...row,
+            bandwaage_t: kind === 'mass' ? scaleAmount(row.bandwaage_t, factor) : row.bandwaage_t,
+          },
+          toMass,
+          toRate,
+        ),
+      );
+      return mergeBridgePayload(prev, {
+        kettenMessungen: mess,
+        form: { ...prev.form, ketteMasseUnit: toMass, ketteRateUnit: toRate },
+      });
+    });
   }, []);
   const ve = (key: string) => ({
     onEditStart: () => beginEdit(key),
@@ -729,9 +780,17 @@ export function ServiceProtocolPage() {
             title={t(uiLang, 'weighings')}
             icon="Scale"
             {...ve('wieg')}
-            summary={weighRows.some(weighingRowHasData) ? weighingSummary(weighRows, uiLang) : null}
+            summary={weighRows.some(weighingRowHasData) ? weighingSummary(weighRows, uiLang, form.wiegungMasseUnit, form.wiegungRateUnit) : null}
           >
-            <WeighingsTable lang={uiLang} rows={weighRows} priorRows={priorView?.wiegungen} onChange={setWeighings} />
+            <WeighingsTable
+              lang={uiLang}
+              rows={weighRows}
+              priorRows={priorView?.wiegungen}
+              massUnit={form.wiegungMasseUnit}
+              rateUnit={form.wiegungRateUnit}
+              onChange={setWeighings}
+              onUnitsChange={setWeighingUnits}
+            />
           </SectionCard>
 
           <SectionCard
@@ -741,7 +800,7 @@ export function ServiceProtocolPage() {
             {...ve('kette')}
             summary={
               chainRows.some(chainRowHasData) || chainMessRows.some(chainMessHasData)
-                ? chainTestSummary(chainRows, chainMessRows, uiLang)
+                ? chainTestSummary(chainRows, chainMessRows, uiLang, form.ketteMasseUnit, form.ketteRateUnit)
                 : null
             }
           >
@@ -751,7 +810,10 @@ export function ServiceProtocolPage() {
               measurements={chainMessRows}
               priorChains={priorView?.ketten}
               priorMeasurements={priorView?.kettenMessungen}
+              massUnit={form.ketteMasseUnit}
+              rateUnit={form.ketteRateUnit}
               onChange={setChainTest}
+              onUnitsChange={setChainUnits}
             />
           </SectionCard>
 

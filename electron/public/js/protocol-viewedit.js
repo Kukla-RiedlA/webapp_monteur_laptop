@@ -262,8 +262,24 @@
     return parts.join('\u0001');
   }
 
+  function activeProtocolViewId() {
+    var i;
+    for (i = 0; i < VIEWS.length; i++) {
+      var root = document.getElementById(VIEWS[i]);
+      if (root && root.classList.contains('active')) return VIEWS[i];
+    }
+    return '';
+  }
+
+  function viewsToScan() {
+    if (!window.KuklaProtocolViewWatch || typeof window.KuklaProtocolViewWatch.protocolViewsToScan !== 'function') {
+      return [];
+    }
+    return window.KuklaProtocolViewWatch.protocolViewsToScan(activeProtocolViewId());
+  }
+
   function refreshOpenViews() {
-    VIEWS.forEach(function (id) {
+    viewsToScan().forEach(function (id) {
       var root = document.getElementById(id);
       if (!root) return;
       root.querySelectorAll('.sp-v2-section').forEach(function (section) {
@@ -293,5 +309,6 @@
   } else {
     init();
   }
+  window.kuklaRefreshProtocolViews = refreshOpenViews;
   setInterval(refreshOpenViews, 400);
 })();

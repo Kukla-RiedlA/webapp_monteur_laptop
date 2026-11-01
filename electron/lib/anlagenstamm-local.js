@@ -150,7 +150,7 @@ function ensureAnlagenstammLocalSchema(dbOrSql) {
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_fab ON anlagenstamm_local(fabrikationsnummer)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_type ON anlagenstamm_local(type)');
   run('CREATE INDEX IF NOT EXISTS idx_anlagenstamm_local_kunde ON anlagenstamm_local(aktueller_kunde)');
-  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT', 'dms_position TEXT', 'vers_spannung TEXT', 'sensitivitaet TEXT', 'elektronik_type TEXT', 'geraete_nummer TEXT', 'bussystem TEXT', 'behaelter_nenninhalt TEXT']) {
+  for (const col of ['pn_root_name TEXT', 'ted_mechanik TEXT', 'kraftaufnehmer_extra TEXT', 'dms_position TEXT', 'vers_spannung TEXT', 'sensitivitaet TEXT', 'elektronik_type TEXT', 'geraete_nummer TEXT', 'bussystem TEXT', 'behaelter_nenninhalt TEXT', 'extras_checked_at TEXT']) {
     try {
       run(`ALTER TABLE anlagenstamm_local ADD COLUMN ${col}`);
     } catch (err) {
@@ -946,7 +946,7 @@ async function fetchAnlagenstammListExtrasChunk(base, authHeader, fabs) {
       signal: ac.signal,
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || data.success === false) return null;
+    if (!anlagenstammExtrasChunkOk(data, r.ok)) return null;
     return data;
   } catch (_) {
     return null;
@@ -989,6 +989,28 @@ async function mergeExtrasIntoRows(base, authHeader, rows) {
   });
 }
 
+/** true nur bei explizitem Erfolg. Leeres {} darf den Abgleich nicht als fertig markieren. */
+function anlagenstammExtrasChunkOk(data, httpOk) {
+  if (httpOk === false) return false;
+  if (!data || typeof data !== 'object') return false;
+  return data.success === true || data.ok === true;
+}
+
+function findCleanExtrasRow(db, fab) {
+  const sql =
+    'SELECT fabrikationsnummer, pn_root_name, ted_mechanik FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) AND dirty = 0 LIMIT 1';
+  const f = String(fab || '').trim();
+  if (!f) return null;
+  const exact = db.prepare(sql).get(f);
+  if (exact) return exact;
+  const digits = normalizeFabDigits(f);
+  if (digits && digits !== f) {
+    const byDigits = db.prepare(sql).get(digits);
+    if (byDigits) return byDigits;
+  }
+  return null;
+}
+
 /** TED/PN-Extras in SQLite persistieren (nach Online-Merge). */
 function persistAnlagenstammExtras(db, pnByFab, tedByFab) {
   if (!db) return 0;
@@ -1005,25 +1027,46 @@ function persistAnlagenstammExtras(db, pnByFab, tedByFab) {
   for (const fab of allFabs) {
     const f = String(fab || '').trim();
     if (!f) continue;
-    const pn = String((pnByFab && pnByFab[fab]) || '').trim();
-    const ted = tedByFab && tedByFab[fab];
-    const tedJson = serializeTedMechanikForDb(ted);
+    const pnRaw = lookupFabInExtrasMap(pnByFab, f);
+    const tedRaw = lookupFabInExtrasMap(tedByFab, f);
+    const pn = String(pnRaw != null ? pnRaw : '').trim();
+    const tedJson = serializeTedMechanikForDb(tedRaw);
     if (!pn && !tedJson) continue;
-    const existing = db
-      .prepare(
-        'SELECT pn_root_name, ted_mechanik FROM anlagenstamm_local WHERE TRIM(fabrikationsnummer) = TRIM(?) AND dirty = 0 LIMIT 1',
-      )
-      .get(f);
+    const existing = findCleanExtrasRow(db, f);
     if (!existing) continue;
+    const storedFab = String(existing.fabrikationsnummer || '').trim();
+    if (!storedFab) continue;
     const curPn = String(existing.pn_root_name || '').trim();
     const curTed = parseTedMechanik(existing.ted_mechanik);
     const nextPn = pn || curPn;
     const nextTedJson = tedJson || (curTed.length ? JSON.stringify(curTed) : '');
     if (nextPn === curPn && nextTedJson === String(existing.ted_mechanik || '')) continue;
-    updateStmt.run(nextPn, nextTedJson, f);
+    updateStmt.run(nextPn, nextTedJson, storedFab);
     updated++;
   }
   return updated;
+}
+
+/** Auch leere Server-Antworten merken, damit fehlende Links nicht bei jedem Öffnen neu angefragt werden. */
+function markAnlagenstammExtrasChecked(db, fabs, checkedAt) {
+  if (!db) return 0;
+  ensureAnlagenstammLocalSchema(db);
+  const stamp = checkedAt || new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const updateStmt = db.prepare(
+    `UPDATE anlagenstamm_local SET extras_checked_at = ?
+     WHERE TRIM(fabrikationsnummer) = TRIM(?) AND dirty = 0`,
+  );
+  let n = 0;
+  const seen = new Set();
+  for (const fab of fabs || []) {
+    const row = findCleanExtrasRow(db, fab);
+    const storedFab = row ? String(row.fabrikationsnummer || '').trim() : '';
+    if (!storedFab || seen.has(storedFab)) continue;
+    seen.add(storedFab);
+    updateStmt.run(stamp, storedFab);
+    n++;
+  }
+  return n;
 }
 
 /** Leere dirty-Stubs (nur FN aus jobs.fabrikationsnummern) blockieren Server-Upserts — entfernen. */
@@ -1624,6 +1667,48 @@ function isPnFullRefreshDue(lastFullAt) {
   return Date.now() - ms >= PN_TREE_FULL_REFRESH_MS;
 }
 
+function isAnlagenstammExtrasCheckStale(lastCheckedAt) {
+  return isPnFullRefreshDue(lastCheckedAt);
+}
+
+/**
+ * FNs ohne frische TED/PN-Prüfung. Vollständige Zeilen ohne Zeitstempel (älterer Cache)
+ * bleiben stehen, Lücken (vierstellige FN u. a.) werden nachgezogen.
+ */
+function listStaleAnlagenExtrasFabs(db, limit) {
+  ensureAnlagenstammLocalSchema(db);
+  const cap = Math.max(1, Math.min(2000, Number(limit) || 400));
+  const cutoff = new Date(Date.now() - PN_TREE_FULL_REFRESH_MS).toISOString().replace('T', ' ').slice(0, 19);
+  const rows = db
+    .prepare(
+      `SELECT TRIM(fabrikationsnummer) AS fab
+       FROM anlagenstamm_local
+       WHERE dirty = 0
+         AND TRIM(COALESCE(fabrikationsnummer, '')) <> ''
+         AND (
+           extras_checked_at IS NULL
+           OR TRIM(extras_checked_at) = ''
+           OR extras_checked_at < ?
+         )
+         AND NOT (
+           (extras_checked_at IS NULL OR TRIM(extras_checked_at) = '')
+           AND TRIM(COALESCE(pn_root_name, '')) <> ''
+           AND TRIM(COALESCE(ted_mechanik, '')) NOT IN ('', '[]', 'null')
+         )
+       ORDER BY
+         CASE
+           WHEN TRIM(COALESCE(pn_root_name, '')) = ''
+             AND TRIM(COALESCE(ted_mechanik, '')) IN ('', '[]', 'null') THEN 0
+           ELSE 1
+         END,
+         LENGTH(TRIM(fabrikationsnummer)),
+         TRIM(fabrikationsnummer)
+       LIMIT ${cap}`,
+    )
+    .all(cutoff);
+  return (rows || []).map((r) => String(r.fab || '').trim()).filter(Boolean);
+}
+
 /** Sync-Phasen zurücksetzen (manueller Vollabgleich oder TTL-Ablauf). */
 function resetAnlagenstammSyncPhases(db, options) {
   ensureAnlagenstammLocalSchema(db);
@@ -1835,6 +1920,7 @@ function markExtrasFullRefresh(db) {
 }
 
 const EXTRAS_SYNC_CHUNK = 40;
+const EXTRAS_GAP_BATCH = 400;
 
 async function fetchMobileExtrasChunk(base, authHeader, technicianId, fabs) {
   const url = `${base}/api/mobile/anlagenstamm_sync_extras.php`;
@@ -1852,7 +1938,7 @@ async function fetchMobileExtrasChunk(base, authHeader, technicianId, fabs) {
       signal: ac.signal,
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || (data && data.ok === false && data.success !== true)) {
+    if (!anlagenstammExtrasChunkOk(data, r.ok)) {
       return {
         ok: false,
         error: (data && data.error) || r.statusText || 'HTTP ' + r.status,
@@ -1879,6 +1965,69 @@ async function fetchMobileExtrasChunk(base, authHeader, technicianId, fabs) {
  * Der Monteur-Export setzt _skip_extras, deshalb fehlen die Spaltenlinks sonst.
  * Kein Dateisystem: weder OneDrive noch Fileserver-Scan.
  */
+function fabsToMarkExtrasChecked(source, chunk, pnByFab, tedByFab) {
+  if (source === 'web') return chunk;
+  return (chunk || []).filter((fab) => {
+    const pn = String(lookupFabInExtrasMap(pnByFab, fab) || '').trim();
+    const ted = serializeTedMechanikForDb(lookupFabInExtrasMap(tedByFab, fab));
+    return !!(pn || ted);
+  });
+}
+
+async function fetchExtrasChunkEither(base, auth, technicianId, chunk) {
+  const web = await fetchAnlagenstammListExtrasChunk(base, auth, chunk);
+  if (web && anlagenstammExtrasChunkOk(web, true)) {
+    return {
+      ok: true,
+      source: 'web',
+      pn_by_fab: web.pn_by_fab || {},
+      ted_by_fab: web.ted_by_fab || {},
+    };
+  }
+  if (Number.isFinite(technicianId) && technicianId > 0) {
+    const mobile = await fetchMobileExtrasChunk(base, auth, technicianId, chunk);
+    if (mobile && mobile.ok) return Object.assign({ source: 'mobile' }, mobile);
+    return mobile;
+  }
+  return { ok: false, error: 'Extras-Export fehlgeschlagen.', _httpStatus: 0 };
+}
+
+/**
+ * Sichtbare FNs: TED/PN vom Server nachziehen und lokal merken.
+ * Die Listen-Antwort selbst bleibt lokal; dieser Aufruf hängt nur an den Link-Spalten.
+ */
+async function fillAnlagenstammExtrasForFabs(db, payload, fabs) {
+  const list = (Array.isArray(fabs) ? fabs : [])
+    .map((v) => String(v || '').trim())
+    .filter(Boolean)
+    .slice(0, 80);
+  if (!db || !list.length) return { ok: true, written: 0 };
+  const bases = buildAnlagenstammSyncBases(payload || {});
+  const username = String((payload && payload.serverUsername) || '').trim();
+  if (!bases.length || !username) return { ok: false, error: 'keine Anmeldung', written: 0 };
+  const technicianId = parseInt(payload.technician_id ?? payload.technicianId, 10);
+  const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
+  let written = 0;
+  try {
+    const tried = await tryDispoBasesInOrder(bases, async (base) => {
+      const data = await fetchExtrasChunkEither(base, auth, technicianId, list);
+      if (!data.ok) {
+        return { ok: false, error: data.error || 'Extras-Export fehlgeschlagen.', _httpStatus: data._httpStatus };
+      }
+      written += persistAnlagenstammExtras(db, data.pn_by_fab, data.ted_by_fab);
+      markAnlagenstammExtrasChecked(db, fabsToMarkExtrasChecked(data.source, list, data.pn_by_fab, data.ted_by_fab));
+      if (written > 0) bumpAnlagenstammDataGeneration();
+      return { ok: true, written };
+    });
+    if (tried.error) return { ok: false, error: tried.error, written: 0 };
+    const inner = tried.result;
+    if (inner && inner.ok === false) return inner;
+    return Object.assign({ ok: true, written }, inner || {});
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e), written: 0 };
+  }
+}
+
 async function syncAnlagenstammListExtrasFromDispo(db, payload, options) {
   options = options || {};
   const dbLock = options.dbLock;
@@ -1899,39 +2048,30 @@ async function syncAnlagenstammListExtrasFromDispo(db, payload, options) {
     }
   });
 
-  const resume = getAnlagenstammSyncResumeState(db);
-  if (!isPnFullRefreshDue(resume.extras_last_full_at)) {
-    return { ok: true, skipped: true, written: 0, backfilled };
-  }
-
   const bases = buildAnlagenstammSyncBases(payload);
   const technicianId = parseInt(payload.technician_id ?? payload.technicianId, 10);
   const username = (payload.serverUsername || '').toString().trim();
-  if (!bases.length || !username || !Number.isFinite(technicianId) || technicianId <= 0) {
-    return { ok: false, error: 'baseUrl, technician_id und Anmeldedaten erforderlich.', backfilled };
+  if (!bases.length || !username) {
+    return { ok: false, error: 'baseUrl und Anmeldedaten erforderlich.', backfilled };
   }
   const auth = authHeaderFromCredentials(payload.serverUsername, payload.serverPassword);
-  const fabs = db
-    .prepare(
-      `SELECT TRIM(fabrikationsnummer) AS fab FROM anlagenstamm_local
-       WHERE dirty = 0 AND TRIM(COALESCE(fabrikationsnummer, '')) <> ''`,
-    )
-    .all()
-    .map((r) => String(r.fab || '').trim())
-    .filter(Boolean);
+  let fabs = [];
+  await withDbLock(async () => {
+    fabs = listStaleAnlagenExtrasFabs(db, EXTRAS_GAP_BATCH);
+  });
   if (!fabs.length) {
     await withDbLock(async () => {
       markExtrasFullRefresh(db);
       if (typeof saveFn === 'function') saveFn();
     });
-    return { ok: true, skipped: false, written: 0, backfilled };
+    return { ok: true, skipped: true, written: 0, backfilled };
   }
 
   const runOnBase = async (base) => {
     let written = 0;
     for (let i = 0; i < fabs.length; i += EXTRAS_SYNC_CHUNK) {
       const chunk = fabs.slice(i, i + EXTRAS_SYNC_CHUNK);
-      const data = await fetchMobileExtrasChunk(base, auth, technicianId, chunk);
+      const data = await fetchExtrasChunkEither(base, auth, technicianId, chunk);
       if (!data.ok) {
         if (data._httpStatus === 404) {
           return { ok: false, error: data.error || 'Extras-Export nicht verfügbar.', _notFound: true, written };
@@ -1940,13 +2080,17 @@ async function syncAnlagenstammListExtrasFromDispo(db, payload, options) {
       }
       await withDbLock(async () => {
         written += persistAnlagenstammExtras(db, data.pn_by_fab, data.ted_by_fab);
+        markAnlagenstammExtrasChecked(
+          db,
+          fabsToMarkExtrasChecked(data.source, chunk, data.pn_by_fab, data.ted_by_fab),
+        );
+        if (written > 0) bumpAnlagenstammDataGeneration();
         if (typeof saveFn === 'function') saveFn();
       });
       await yieldEventLoop();
     }
     await withDbLock(async () => {
-      if (written > 0) bumpAnlagenstammDataGeneration();
-      markExtrasFullRefresh(db);
+      if (!listStaleAnlagenExtrasFabs(db, 1).length) markExtrasFullRefresh(db);
       if (typeof saveFn === 'function') saveFn();
     });
     return { ok: true, written, backfilled };
@@ -3207,6 +3351,9 @@ module.exports = {
   bumpAnlagenstammDataGeneration,
   mergeExtrasIntoRows,
   persistAnlagenstammExtras,
+  markAnlagenstammExtrasChecked,
+  fillAnlagenstammExtrasForFabs,
+  isAnlagenstammExtrasCheckStale,
   lookupFabInExtrasMap,
   clearEmptyDirtyAnlagenstammStubs,
   ANLAGENSTAMM_RECENT_LOCAL_GRACE_MS,

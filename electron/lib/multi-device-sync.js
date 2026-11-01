@@ -229,7 +229,7 @@ function mergeFlatProtocolStores(localPayload, remotePayload) {
       out[key] = lv;
     }
   }
-  ['grundDesEinsatzes_html', 'bemerkungen_html'].forEach((k) => {
+  ['grundDesEinsatzes_html', 'bemerkungen_html', 'empfehlungen_html'].forEach((k) => {
     if (local[k] != null || remote[k] != null) {
       out[k] = pickHtmlPreferringImages(local[k], remote[k]);
     }

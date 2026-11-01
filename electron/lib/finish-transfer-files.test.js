@@ -80,8 +80,9 @@ describe('finish-transfer-files', () => {
       'FN12360_PA7_EN_20261019_1528.CSV',
       'Notiz-1.pdf',
     ]);
-    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528-1.CSV')), false);
-    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528-21.CSV')), false);
+    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528-1.CSV')), true);
+    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528-21.CSV')), true);
+    assert.equal(fs.existsSync(path.join(reise, param, 'FN12360_PA7_EN_20261019_1528.CSV')), true);
   });
 
   it('matches whitelist with and without Dokumente_Monteur prefix', () => {

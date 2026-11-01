@@ -211,7 +211,7 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     }
   });
 
-  it('Datei-Push nutzt mtime/Größe und Cache nur nach Upload', () => {
+  it('Datei-Push nutzt Größe/Inhalt und Cache nur nach Upload', () => {
     const batch = serverSrc.slice(
       serverSrc.indexOf('async function pushFileBatch'),
       serverSrc.indexOf('if (onlyChanged)'),
@@ -228,7 +228,7 @@ describe('Verdrahtung server.js (alle Sync-Stellen)', () => {
     );
   });
 
-  it('mtime-Scan bleibt gleich, gibt aber den Event-Loop frei', () => {
+  it('Änderungs-Scan gibt den Event-Loop frei', () => {
     assert.ok(serverSrc.includes('async function collectChangedDienstreiseSyncFileEntries'));
     assert.ok(serverSrc.includes('await collectChangedDienstreiseSyncFileEntries'));
     assert.ok(serverSrc.includes('await yieldEventLoop()'));

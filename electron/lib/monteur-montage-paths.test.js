@@ -17,6 +17,8 @@ const {
   ensureMonteurMontageDirs,
   ensureMonteurPhotoCategoryDirs,
   alignMonteurMontageDirs,
+  isMonteurMontageIdentitySibling,
+  isMonteurMontageDateTailSibling,
   migrateAliasFnFolders,
   migrateTopLevelMontageIntoFnFolders,
   expandTopLevelMontageRelToFnFolders,
@@ -107,6 +109,102 @@ describe('monteur-montage-paths lazy mkdir', () => {
     assert.equal(fs.existsSync(path.join(montage, desired, 'Protokolle', 'x.pdf')), true);
     assert.equal(fs.existsSync(path.join(montage, desired, 'Bilder')), false);
     assert.equal(fs.existsSync(path.join(montage, desired, 'Parameter')), false);
+  });
+
+  it('align benennt bei geändertem Beginndatum um, ohne previousName', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const oldAo = '2026-10-27_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const photo = path.join(montage, oldAo, 'Bilder', 'Allgemein');
+    fs.mkdirSync(photo, { recursive: true });
+    fs.writeFileSync(path.join(photo, 'bild.jpg'), 'jpeg');
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    assert.equal(fs.existsSync(path.join(montage, oldAo)), false);
+    assert.equal(fs.readFileSync(path.join(montage, desired, 'Bilder', 'Allgemein', 'bild.jpg'), 'utf8'), 'jpeg');
+  });
+
+  it('align schiebt Bilder in einen schon leeren Zielordner', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const oldAo = '2026-10-27_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    fs.mkdirSync(path.join(montage, desired), { recursive: true });
+    fs.mkdirSync(path.join(montage, oldAo, 'Bilder'), { recursive: true });
+    fs.writeFileSync(path.join(montage, oldAo, 'Bilder', 'bild.jpg'), 'jpeg');
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    assert.equal(fs.existsSync(path.join(montage, oldAo)), false);
+    assert.equal(fs.readFileSync(path.join(montage, desired, 'Bilder', 'bild.jpg'), 'utf8'), 'jpeg');
+  });
+
+  it('align führt Bilder zusammen, wenn der neue Ordner schon existiert', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const oldAo = '2026-10-27_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    fs.mkdirSync(path.join(montage, desired, 'Bilder', 'Allgemein'), { recursive: true });
+    fs.writeFileSync(path.join(montage, desired, 'Bilder', 'Allgemein', 'neu.jpg'), 'neu');
+    fs.writeFileSync(path.join(montage, desired, 'Bilder', 'Allgemein', 'gleich.jpg'), 'im-ziel');
+    fs.mkdirSync(path.join(montage, oldAo, 'Bilder', 'Allgemein'), { recursive: true });
+    fs.writeFileSync(path.join(montage, oldAo, 'Bilder', 'Allgemein', 'alt.jpg'), 'alt');
+    fs.writeFileSync(path.join(montage, oldAo, 'Bilder', 'Allgemein', 'gleich.jpg'), 'im-alten');
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    const bilder = path.join(montage, desired, 'Bilder', 'Allgemein');
+    assert.equal(fs.existsSync(path.join(montage, oldAo)), false);
+    assert.equal(fs.readFileSync(path.join(bilder, 'alt.jpg'), 'utf8'), 'alt');
+    assert.equal(fs.readFileSync(path.join(bilder, 'neu.jpg'), 'utf8'), 'neu');
+    assert.equal(fs.readFileSync(path.join(bilder, 'gleich.jpg'), 'utf8'), 'im-ziel');
+    assert.equal(fs.readFileSync(path.join(bilder, 'gleich_2.jpg'), 'utf8'), 'im-alten');
+  });
+
+  it('align lässt einen anderen Kundenrest bei anderem Datum stehen', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const other = '2026-10-27_Andere_Firma_Ort_US_Riedl_Alois';
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    fs.mkdirSync(path.join(montage, other), { recursive: true });
+    fs.writeFileSync(path.join(montage, other, 'x.jpg'), 'x');
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    assert.equal(fs.existsSync(path.join(montage, other, 'x.jpg')), true);
+    assert.equal(fs.existsSync(path.join(montage, desired)), false);
+  });
+
+  it('align mit abgeschaltetem Datums-Tail benennt ohne previousName nicht um', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const oldAo = '2026-10-27_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    fs.mkdirSync(path.join(montage, oldAo), { recursive: true });
+    fs.writeFileSync(path.join(montage, oldAo, 'bild.jpg'), 'jpeg');
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+      allowDateTail: false,
+    });
+
+    assert.equal(fs.existsSync(path.join(montage, oldAo, 'bild.jpg')), true);
+    assert.equal(fs.existsSync(path.join(montage, desired)), false);
+    assert.equal(
+      isMonteurMontageIdentitySibling(oldAo, desired, '2026-10-28_', '_Riedl_Alois'),
+      false,
+    );
+    assert.equal(isMonteurMontageDateTailSibling(oldAo, desired), true);
   });
 
   it('leeres Top-Level-Montage wird entfernt statt neben FN zu stehen', async () => {
@@ -516,7 +614,7 @@ describe('Montagebericht-Dateiname', () => {
       assert.equal(fs.existsSync(path.join(dir, base + '_Montage_DE.pdf')), false);
       assert.equal(fs.existsSync(path.join(dir, base + '_Montage_DE-1.pdf')), false);
       assert.equal(fs.existsSync(path.join(dir, 'Montage_Bericht_' + base + '_DE.pdf')), true);
-      assert.equal(fs.existsSync(path.join(dir, 'Montage_Bericht_' + base + '_DE-1.pdf')), false);
+      assert.equal(fs.existsSync(path.join(dir, 'Montage_Bericht_' + base + '_DE-1.pdf')), true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

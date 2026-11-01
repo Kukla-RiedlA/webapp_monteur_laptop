@@ -88,6 +88,19 @@ function readFileOffMainThread(filePath) {
   return call('readFile', { path: filePath });
 }
 
+function sha256FileOffMainThread(filePath) {
+  return call('sha256File', { path: filePath });
+}
+
+function sha256BufferOffMainThread(data) {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data == null ? '' : data);
+  const bytes = Buffer.allocUnsafeSlow(buf.length);
+  buf.copy(bytes);
+  const payload = { bytes };
+  if (!bytes.byteLength) return call('sha256Buffer', payload);
+  return call('sha256Buffer', payload, [bytes.buffer]);
+}
+
 async function closeCloudIoLane() {
   const current = worker;
   worker = null;
@@ -102,5 +115,7 @@ module.exports = {
   existsOffMainThread,
   readdirOffMainThread,
   readFileOffMainThread,
+  sha256FileOffMainThread,
+  sha256BufferOffMainThread,
   closeCloudIoLane,
 };

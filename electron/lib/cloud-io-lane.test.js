@@ -2,6 +2,7 @@
 
 const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -11,6 +12,8 @@ const {
   existsOffMainThread,
   readdirOffMainThread,
   readFileOffMainThread,
+  sha256FileOffMainThread,
+  sha256BufferOffMainThread,
   closeCloudIoLane,
 } = require('./cloud-io-lane');
 
@@ -38,5 +41,18 @@ describe('cloud-io-lane', () => {
     assert.equal(Buffer.from(buf).toString('utf8'), 'inhalt-a');
     await replaceFileOffMainThread(dest, Buffer.from('inhalt-b'));
     assert.equal(fs.readFileSync(dest, 'utf8'), 'inhalt-b');
+  });
+
+  it('hasht Datei und Puffer wie crypto und lässt replace einen Pfad liefern', async () => {
+    const dest = path.join(dir, 'hash.bin');
+    const body = Buffer.from('kukpit-sha');
+    const expectHex = crypto.createHash('sha256').update(body).digest('hex');
+    const written = await replaceFileOffMainThread(dest, body);
+    assert.equal(written, dest);
+    assert.equal(fs.readFileSync(dest).equals(body), true);
+    assert.equal(await sha256FileOffMainThread(dest), expectHex);
+    assert.equal(await sha256BufferOffMainThread(body), expectHex);
+    assert.equal(body.toString('utf8'), 'kukpit-sha');
+    assert.equal(await sha256FileOffMainThread(path.join(dir, 'fehlt-sha.bin')), '');
   });
 });

@@ -43,6 +43,9 @@
         if (tabId === 'parameter' && window.KuklaAnlagenParameterTab) {
           window.KuklaAnlagenParameterTab.load();
         }
+        if (tabId === 'simulation' && window.KuklaAnlagenSimulation) {
+          window.KuklaAnlagenSimulation.load();
+        }
       });
     });
   }

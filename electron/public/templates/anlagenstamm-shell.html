@@ -116,6 +116,7 @@
         <button type="button" class="akte-tab" data-akte-tab="hinweise">Hinweise</button>
         <button type="button" class="akte-tab" data-akte-tab="bussystem">Bussystem</button>
         <button type="button" class="akte-tab" data-akte-tab="hist">Historie</button>
+        <button type="button" class="akte-tab" data-akte-tab="simulation">Simulation</button>
       </nav>
       <div class="akte-panel is-active" data-akte-panel="overview">
         <div class="akte-section"><div class="akte-section-head">Identität</div>
@@ -249,6 +250,13 @@
       <div class="akte-panel" data-akte-panel="hist">
         <div class="akte-section"><div class="akte-section-head">Historie</div>
         <div class="akte-section-body"><p class="muted">Ereignisse unter Dokumente.</p></div></div>
+      </div>
+      <div class="akte-panel" data-akte-panel="simulation">
+        <div class="akte-section"><div class="akte-section-head">Simulation</div>
+        <div class="akte-section-body opcg-sim">
+          <iframe class="opcg-sim-frame" data-opcg-frame title="OP-G Simulation" src="opcg/index.html?bild=1"></iframe>
+          <div data-opcg-lists></div>
+        </div></div>
       </div>
     </form>
   </div>

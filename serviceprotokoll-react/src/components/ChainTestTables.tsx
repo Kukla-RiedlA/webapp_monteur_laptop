@@ -1,7 +1,9 @@
 import type { ChainMessRow, ChainRow } from '../types';
 import { chainMessHasData, chainRowHasData, emptyChainMessRow, emptyChainRow } from '../types';
 import { t, type UiLang } from '../i18n';
+import { massFactor, normMassUnit, normRateUnit, rateFactor, type MassUnit, type RateUnit } from '../units';
 import { PriorInput } from './TextInput';
+import { ProtocolUnitSelect } from './ProtocolUnitSelect';
 
 function parseNum(raw: string): number | null {
   const s = String(raw || '').trim().replace(',', '.');
@@ -30,17 +32,18 @@ export function recalcChainRow(row: ChainRow, recalcMeter: boolean): ChainRow {
   return next;
 }
 
-export function recalcChainMess(row: ChainMessRow): ChainMessRow {
+export function recalcChainMess(row: ChainMessRow, massUnit: MassUnit = 't', rateUnit: RateUnit = 't/h'): ChainMessRow {
   const next = { ...row, pruefkette_t: '', fehler_prozent: '', leistung_th: '' };
   const band = parseNum(row.bandwaage_t);
   const kgm = parseNum(row.kg_pro_m);
   const geschw = parseNum(row.geschwindigkeit_ms);
   const messzeit = parseNum(row.messzeit_s);
   if (messzeit != null && messzeit >= 1 && kgm != null && geschw != null) {
-    const pk = (kgm * geschw * messzeit) / 1000;
-    next.pruefkette_t = fmt(pk, 4);
+    const pkT = (kgm * geschw * messzeit) / 1000;
+    const pk = pkT * massFactor('t', massUnit);
+    next.pruefkette_t = fmt(pk, massUnit === 'g' ? 0 : 4);
     if (band != null && pk !== 0) next.fehler_prozent = fmtPct(((band - pk) / pk) * 100);
-    next.leistung_th = fmt((pk / messzeit) * 3600, 1);
+    next.leistung_th = fmt((pkT / messzeit) * 3600 * rateFactor('t/h', rateUnit), rateUnit === 'kg/h' ? 0 : 1);
   }
   return next;
 }
@@ -75,9 +78,9 @@ function meterFromChains(rows: ChainRow[]): string {
   return '';
 }
 
-function applyMeterToMess(mess: ChainMessRow[], meter: string): ChainMessRow[] {
+function applyMeterToMess(mess: ChainMessRow[], meter: string, massUnit: MassUnit, rateUnit: RateUnit): ChainMessRow[] {
   if (!meter) return mess;
-  return mess.map((m) => recalcChainMess({ ...m, kg_pro_m: meter }));
+  return mess.map((m) => recalcChainMess({ ...m, kg_pro_m: meter }, massUnit, rateUnit));
 }
 
 const CHAIN_COLS: Array<{ key: keyof ChainRow; de: string; en: string }> = [
@@ -88,16 +91,18 @@ const CHAIN_COLS: Array<{ key: keyof ChainRow; de: string; en: string }> = [
   { key: 'gewicht_pro_meter', de: 'Gewicht / Meter', en: 'Weight / metre' },
 ];
 
-const MESS_COLS: Array<{ key: keyof ChainMessRow; de: string; en: string }> = [
-  { key: 'bandwaage_t', de: 'Bandwaage [t]', en: 'Belt [t]' },
-  { key: 'pruefkette_t', de: 'Prüfkette [t]', en: 'Test chain [t]' },
-  { key: 'kg_pro_m', de: 'kg/m', en: 'kg/m' },
-  { key: 'geschwindigkeit_ms', de: 'Geschw. [m/s]', en: 'Speed [m/s]' },
-  { key: 'messzeit_s', de: 'Messzeit [s]', en: 'Time [s]' },
-  { key: 'fehler_prozent', de: 'Fehler [%]', en: 'Error [%]' },
-  { key: 'leistung_th', de: 'Leistung [t/h]', en: 'Capacity [t/h]' },
-  { key: 'bemerkung', de: 'Bemerkung', en: 'Remark' },
-];
+function messCols(mass: string, rate: string): Array<{ key: keyof ChainMessRow; de: string; en: string }> {
+  return [
+    { key: 'bandwaage_t', de: 'Bandwaage [' + mass + ']', en: 'Belt [' + mass + ']' },
+    { key: 'pruefkette_t', de: 'Prüfkette [' + mass + ']', en: 'Test chain [' + mass + ']' },
+    { key: 'kg_pro_m', de: 'kg/m', en: 'kg/m' },
+    { key: 'geschwindigkeit_ms', de: 'Geschw. [m/s]', en: 'Speed [m/s]' },
+    { key: 'messzeit_s', de: 'Messzeit [s]', en: 'Time [s]' },
+    { key: 'fehler_prozent', de: 'Fehler [%]', en: 'Error [%]' },
+    { key: 'leistung_th', de: 'Leistung [' + rate + ']', en: 'Capacity [' + rate + ']' },
+    { key: 'bemerkung', de: 'Bemerkung', en: 'Remark' },
+  ];
+}
 
 function chainSums(rows: ChainRow[]): Record<string, string> {
   const included = rows.filter((r) => r.in_summe !== false && chainRowHasData(r));
@@ -222,11 +227,12 @@ function MiniTable({
   );
 }
 
-export function chainTestSummary(chains: ChainRow[], mess: ChainMessRow[], lang: UiLang) {
+export function chainTestSummary(chains: ChainRow[], mess: ChainMessRow[], lang: UiLang, massUnit = 't', rateUnit = 't/h') {
   const filledChains = chains.filter(chainRowHasData);
   const filledMess = mess.filter(chainMessHasData);
   if (!filledChains.length && !filledMess.length) return null;
   const de = lang !== 'en';
+  const MESS_COLS = messCols(normMassUnit(massUnit, 't'), normRateUnit(rateUnit, 't/h'));
   const cSums = chainSums(filledChains);
   const mSums = messSums(filledMess);
   return (
@@ -278,19 +284,24 @@ interface ChainTestTablesProps {
   measurements: ChainMessRow[];
   priorChains?: ChainRow[] | null;
   priorMeasurements?: ChainMessRow[] | null;
+  massUnit: string;
+  rateUnit: string;
   onChange: (chains: ChainRow[], measurements: ChainMessRow[]) => void;
+  onUnitsChange: (kind: 'mass' | 'rate', value: string) => void;
 }
 
-export function ChainTestTables({ lang, chains, measurements, priorChains, priorMeasurements, onChange }: ChainTestTablesProps) {
+export function ChainTestTables({ lang, chains, measurements, priorChains, priorMeasurements, massUnit, rateUnit, onChange, onUnitsChange }: ChainTestTablesProps) {
   const chainList = chains.length ? chains : [emptyChainRow()];
   const messList = measurements.length ? measurements : [emptyChainMessRow()];
+  const mass = normMassUnit(massUnit, 't');
+  const rate = normRateUnit(rateUnit, 't/h');
   const cSums = chainSums(chainList);
   const mSums = messSums(messList);
   const dash = (v: string) => v || '–';
 
   function commit(nextChains: ChainRow[], nextMess: ChainMessRow[], pushMeter: boolean) {
     const meter = pushMeter ? meterFromChains(nextChains) : '';
-    onChange(nextChains, pushMeter ? applyMeterToMess(nextMess, meter) : nextMess);
+    onChange(nextChains, pushMeter ? applyMeterToMess(nextMess, meter, mass, rate) : nextMess);
   }
 
   function patchChain(idx: number, partial: Partial<ChainRow>, recalcMeter: boolean) {
@@ -299,7 +310,7 @@ export function ChainTestTables({ lang, chains, measurements, priorChains, prior
   }
 
   function patchMess(idx: number, partial: Partial<ChainMessRow>) {
-    const next = messList.map((r, i) => (i === idx ? recalcChainMess({ ...r, ...partial }) : r));
+    const next = messList.map((r, i) => (i === idx ? recalcChainMess({ ...r, ...partial }, mass, rate) : r));
     onChange(chainList, next);
   }
 
@@ -425,7 +436,7 @@ export function ChainTestTables({ lang, chains, measurements, priorChains, prior
             className="inline-flex h-8 items-center rounded-lg border border-kukla-border bg-white px-3 text-xs font-semibold text-[#0c6a4d] hover:bg-kukla-mint"
             onClick={() => {
               const meter = meterFromChains(chainList);
-              const blank = recalcChainMess({ ...emptyChainMessRow(), kg_pro_m: meter });
+              const blank = recalcChainMess({ ...emptyChainMessRow(), kg_pro_m: meter }, mass, rate);
               onChange(chainList, [...messList, blank]);
             }}
           >
@@ -436,20 +447,30 @@ export function ChainTestTables({ lang, chains, measurements, priorChains, prior
           <table className="w-full min-w-[980px] border-collapse text-xs">
             <thead>
               <tr className="bg-kukla-mint text-left text-[#0c6a4d]">
-                {[
-                  '#',
-                  t(lang, 'chainBelt'),
-                  t(lang, 'chainProof'),
-                  t(lang, 'chainKgM'),
-                  t(lang, 'chainSpeed'),
-                  t(lang, 'chainTime'),
-                  t(lang, 'errorPct'),
-                  t(lang, 'rateTh'),
-                  t(lang, 'remark'),
-                  'Σ / PDF / ×',
-                ].map((h) => (
-                  <th key={h} className="px-1 py-1 font-semibold">
-                    {h}
+                {(
+                  [
+                    { key: 'nr', label: '#' },
+                    { key: 'band', label: t(lang, 'chainBelt'), unit: 'mass' as const },
+                    { key: 'proof', label: t(lang, 'chainProof'), unit: 'mass' as const },
+                    { key: 'kgm', label: t(lang, 'chainKgM') },
+                    { key: 'speed', label: t(lang, 'chainSpeed') },
+                    { key: 'time', label: t(lang, 'chainTime') },
+                    { key: 'pct', label: t(lang, 'errorPct') },
+                    { key: 'rate', label: t(lang, 'rateTh'), unit: 'rate' as const },
+                    { key: 'remark', label: t(lang, 'remark') },
+                    { key: 'flags', label: 'Σ / PDF / ×' },
+                  ]
+                ).map((h) => (
+                  <th key={h.key} className="px-1 py-1 font-semibold">
+                    <span className="block">{h.label}</span>
+                    {h.unit ? (
+                      <ProtocolUnitSelect
+                        kind={h.unit}
+                        value={h.unit === 'rate' ? rate : mass}
+                        label={h.label}
+                        onChange={(value) => onUnitsChange(h.unit === 'rate' ? 'rate' : 'mass', value)}
+                      />
+                    ) : null}
                   </th>
                 ))}
               </tr>

@@ -17,7 +17,7 @@ const fs = require('fs');
 const { buildDispoMonteurHeaders } = require('./dispo-monteur-headers');
 const { getOrCreateDeviceId } = require('./device-id');
 const { parseMlPdfBuffer, isMlPdfCandidate, mlPdfLangRank, mlPdfMatchRank, mlFabFit } = require('./anlagenstamm-ml-pdf');
-const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits } = require('./anlagenstamm-local');
+const { readParameterSourceText, decodeParameterFileBytes, normalizeFabDigits, fillAnlagenstammExtrasForFabs } = require('./anlagenstamm-local');
 
 function dispoMonteurHeaders(ctx, technicianId, credsOpt) {
   const creds =
@@ -273,6 +273,33 @@ function registerAnlagenstammPhpRoutes(app, ctx) {
 
   app.post('/api/anlagenstamm_list_extras.php', express.json({ limit: '4mb' }), (req, res) => {
     res.json(extrasWithOffline(req, getAnlagenstammExtrasResponse(db(), req.body || {})));
+  });
+
+  // Nur für Link-Spalten nach dem lokalen Treffer. Die Liste selbst wartet hier nicht.
+  app.post('/api/anlagenstamm_extras_fill.php', express.json({ limit: '2mb' }), async (req, res) => {
+    const body = req.body || {};
+    try {
+      const creds = ctx.resolveDispoServerCreds ? ctx.resolveDispoServerCreds({}) : {};
+      const technicianId = ctx.getTechnicianId(req);
+      const local = getAnlagenstammExtrasResponse(db(), body);
+      const gap = Array.isArray(local.needs_fill) && local.needs_fill.length ? local.needs_fill : [];
+      if (gap.length) {
+        const filled = await fillAnlagenstammExtrasForFabs(db(), {
+          technician_id: technicianId,
+          serverUsername: creds.serverUsername || (ctx.getDispoUsername ? ctx.getDispoUsername() : ''),
+          serverPassword: creds.serverPassword != null ? creds.serverPassword : (ctx.getDispoPassword ? ctx.getDispoPassword() : ''),
+          baseUrl: creds.baseUrl || (ctx.getDispoBaseUrl ? ctx.getDispoBaseUrl() : ''),
+          externalUrl: creds.externalUrl || (ctx.getDispoExternalUrl ? ctx.getDispoExternalUrl() : ''),
+          internalUrl: creds.internalUrl || (ctx.getDispoInternalUrl ? ctx.getDispoInternalUrl() : ''),
+        }, gap);
+        if (filled && filled.ok && typeof ctx.saveDb === 'function') {
+          try { ctx.saveDb(); } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.warn('[anlagenstamm_extras_fill]', e && e.message ? e.message : e);
+    }
+    res.json(extrasWithOffline(req, getAnlagenstammExtrasResponse(db(), body)));
   });
 
   app.post('/api/anlagenstamm_save.php', async (req, res) => {

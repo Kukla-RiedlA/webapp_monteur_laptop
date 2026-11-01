@@ -292,7 +292,6 @@ function createBackgroundJobService(db, save, hooks) {
         message: null,
       });
     }
-    save();
   }
 
   function markStaleRunningAsInterrupted() {

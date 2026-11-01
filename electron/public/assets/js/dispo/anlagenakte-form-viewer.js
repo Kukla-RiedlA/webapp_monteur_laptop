@@ -29,6 +29,8 @@
       grundDesEinsatzes_html: 'Grund des Einsatzes',
       bemerkungen: 'Bemerkungen',
       bemerkungen_html: 'Bemerkungen',
+      empfehlungen: 'Empfehlungen',
+      empfehlungen_html: 'Empfehlungen',
       projekt: 'Projekt',
       language: 'Sprache',
       languages: 'Sprachen',

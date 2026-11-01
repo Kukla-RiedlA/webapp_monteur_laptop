@@ -7,6 +7,7 @@ const {
   deleteLocal,
   parseTedMechanik,
   persistAnlagenstammExtras,
+  isAnlagenstammExtrasCheckStale,
   normalizeFabDigits,
   repairMergedFnLeistungLocal,
   getAnlagenstammDataGeneration,
@@ -260,16 +261,28 @@ function getAnlagenstammExtrasResponse(db, body = {}) {
     .filter(Boolean);
   const pn_by_fab = {};
   const ted_by_fab = {};
+  const needs_fill = [];
   let source = 'local_empty';
-  if (!fabs.length) return { success: true, pn_by_fab, ted_by_fab, source };
+  if (!fabs.length) return { success: true, pn_by_fab, ted_by_fab, needs_fill, source };
   const placeholders = fabs.map(() => '?').join(',');
-  const rows = db
-    .prepare(
-      `SELECT fabrikationsnummer, pn_root_name, ted_mechanik
-       FROM anlagenstamm_local
-       WHERE fabrikationsnummer IN (${placeholders})`,
-    )
-    .all(...fabs);
+  let rows = [];
+  try {
+    rows = db
+      .prepare(
+        `SELECT fabrikationsnummer, pn_root_name, ted_mechanik, extras_checked_at
+         FROM anlagenstamm_local
+         WHERE fabrikationsnummer IN (${placeholders})`,
+      )
+      .all(...fabs);
+  } catch (_) {
+    rows = db
+      .prepare(
+        `SELECT fabrikationsnummer, pn_root_name, ted_mechanik
+         FROM anlagenstamm_local
+         WHERE fabrikationsnummer IN (${placeholders})`,
+      )
+      .all(...fabs);
+  }
   const byFab = new Map();
   for (const row of rows) {
     byFab.set(String(row.fabrikationsnummer || '').trim(), row);
@@ -298,8 +311,12 @@ function getAnlagenstammExtrasResponse(db, body = {}) {
     pn_by_fab[fab] = extra.pn;
     ted_by_fab[fab] = extra.ted;
     if (extra.pn || extra.ted.length) source = 'local_cache';
+    const row = byFab.get(fab);
+    const checkedAt = row ? row.extras_checked_at : null;
+    const gap = !extra.pn || !extra.ted.length;
+    if (gap && isAnlagenstammExtrasCheckStale(checkedAt)) needs_fill.push(fab);
   }
-  return { success: true, pn_by_fab, ted_by_fab, source };
+  return { success: true, pn_by_fab, ted_by_fab, needs_fill, source };
 }
 
 function mergeAnlagenstammExtrasWithRemote(local, remote) {

@@ -1,7 +1,9 @@
 import type { WeighingRow } from '../types';
 import { emptyWeighingRow, weighingRowHasData } from '../types';
 import { t, type UiLang } from '../i18n';
+import { normMassUnit, normRateUnit } from '../units';
 import { PriorInput } from './TextInput';
+import { ProtocolUnitSelect } from './ProtocolUnitSelect';
 
 function parseNum(raw: string): number | null {
   const s = String(raw || '').trim().replace(',', '.');
@@ -35,16 +37,18 @@ export function recalcWeighing(row: WeighingRow, fromTaraBrutto: boolean): Weigh
   return next;
 }
 
-const VIEW_COLS: Array<{ key: keyof WeighingRow; de: string; en: string }> = [
-  { key: 'bandwaage_kg', de: 'Band', en: 'Belt' },
-  { key: 'kontrollwaage_kg', de: 'Kontr.', en: 'Ctrl' },
-  { key: 'fehler_kg', de: 'kg', en: 'kg' },
-  { key: 'fehler_prozent', de: '%', en: '%' },
-  { key: 'leistung_th', de: 't/h', en: 't/h' },
-  { key: 'tara_kg', de: 'Tara', en: 'Tare' },
-  { key: 'brutto_kg', de: 'Brutto', en: 'Gross' },
-  { key: 'bemerkung', de: 'Bemerkung', en: 'Remark' },
-];
+function viewCols(mass: string, rate: string): Array<{ key: keyof WeighingRow; de: string; en: string }> {
+  return [
+    { key: 'bandwaage_kg', de: 'Band ' + mass, en: 'Belt ' + mass },
+    { key: 'kontrollwaage_kg', de: 'Kontr. ' + mass, en: 'Ctrl ' + mass },
+    { key: 'fehler_kg', de: mass, en: mass },
+    { key: 'fehler_prozent', de: '%', en: '%' },
+    { key: 'leistung_th', de: rate, en: rate },
+    { key: 'tara_kg', de: 'Tara ' + mass, en: 'Tare ' + mass },
+    { key: 'brutto_kg', de: 'Brutto ' + mass, en: 'Gross ' + mass },
+    { key: 'bemerkung', de: 'Bemerkung', en: 'Remark' },
+  ];
+}
 
 function weighingSums(rows: WeighingRow[]): Record<string, string> {
   const included = rows.filter((r) => r.in_summe !== false && weighingRowHasData(r));
@@ -72,11 +76,12 @@ function weighingSums(rows: WeighingRow[]): Record<string, string> {
   return sums;
 }
 
-export function weighingSummary(rows: WeighingRow[], lang: UiLang) {
+export function weighingSummary(rows: WeighingRow[], lang: UiLang, massUnit = 'kg', rateUnit = 't/h') {
   const filled = rows.filter(weighingRowHasData);
   if (!filled.length) return null;
   const sums = weighingSums(filled);
   const de = lang !== 'en';
+  const VIEW_COLS = viewCols(normMassUnit(massUnit, 'kg'), normRateUnit(rateUnit, 't/h'));
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[720px] border-collapse text-xs text-[#111827]">
@@ -121,10 +126,13 @@ interface WeighingsTableProps {
   lang: UiLang;
   rows: WeighingRow[];
   priorRows?: WeighingRow[] | null;
+  massUnit: string;
+  rateUnit: string;
   onChange: (rows: WeighingRow[]) => void;
+  onUnitsChange: (kind: 'mass' | 'rate', value: string) => void;
 }
 
-export function WeighingsTable({ lang, rows, priorRows, onChange }: WeighingsTableProps) {
+export function WeighingsTable({ lang, rows, priorRows, massUnit, rateUnit, onChange, onUnitsChange }: WeighingsTableProps) {
   const list = rows.length ? rows : [emptyWeighingRow()];
 
   function patch(idx: number, partial: Partial<WeighingRow>, fromTaraBrutto: boolean) {
@@ -143,16 +151,18 @@ export function WeighingsTable({ lang, rows, priorRows, onChange }: WeighingsTab
   const sums = weighingSums(list);
   const dash = (v: string) => v || '–';
 
-  const headers = [
-    '#',
-    t(lang, 'beltScale'),
-    t(lang, 'controlScale'),
-    t(lang, 'errorKg'),
-    t(lang, 'errorPct'),
-    t(lang, 'rateTh'),
-    t(lang, 'tareKg'),
-    t(lang, 'grossKg'),
-    t(lang, 'remark'),
+  const mass = normMassUnit(massUnit, 'kg');
+  const rate = normRateUnit(rateUnit, 't/h');
+  const headers: Array<{ key: string; label: string; unit?: 'mass' | 'rate' }> = [
+    { key: 'nr', label: '#' },
+    { key: 'band', label: t(lang, 'beltScale'), unit: 'mass' },
+    { key: 'kontroll', label: t(lang, 'controlScale'), unit: 'mass' },
+    { key: 'fehler', label: t(lang, 'errorKg'), unit: 'mass' },
+    { key: 'pct', label: t(lang, 'errorPct') },
+    { key: 'rate', label: t(lang, 'rateTh'), unit: 'rate' },
+    { key: 'tara', label: t(lang, 'tareKg'), unit: 'mass' },
+    { key: 'brutto', label: t(lang, 'grossKg'), unit: 'mass' },
+    { key: 'remark', label: t(lang, 'remark') },
   ];
 
   return (
@@ -169,8 +179,16 @@ export function WeighingsTable({ lang, rows, priorRows, onChange }: WeighingsTab
           <thead>
             <tr className="bg-kukla-mint text-left text-[#0c6a4d]">
               {headers.map((h) => (
-                <th key={h} className="px-1 py-1 font-semibold">
-                  {h}
+                <th key={h.key} className="px-1 py-1 font-semibold">
+                  <span className="block">{h.label}</span>
+                  {h.unit ? (
+                    <ProtocolUnitSelect
+                      kind={h.unit}
+                      value={h.unit === 'rate' ? rate : mass}
+                      label={h.label}
+                      onChange={(value) => onUnitsChange(h.unit === 'rate' ? 'rate' : 'mass', value)}
+                    />
+                  ) : null}
                 </th>
               ))}
               <th className="px-1 py-1 font-semibold">Σ / PDF / ×</th>
