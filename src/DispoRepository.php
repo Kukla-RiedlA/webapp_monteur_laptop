@@ -602,11 +602,22 @@ final class DispoRepository
     }
 
     /**
-     * Prüfen, ob userId ein Monteur ist und aktiv.
+     * Feldmonteur: Abwesenheit. KUKpit intern bleibt aussen.
      */
     public function isTechnician(int $userId): bool
     {
         $sql = 'SELECT 1 FROM users WHERE id = :id AND role = \'monteur\' AND active = 1';
+        $stmt = $this->fsm->prepare($sql);
+        $stmt->execute([':id' => $userId]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * KUKpit-Ressourcen: Monteur oder KUKpit intern, aktiv.
+     */
+    public function isMonteurResource(int $userId): bool
+    {
+        $sql = 'SELECT 1 FROM users WHERE id = :id AND role IN (\'monteur\',\'kukpit\') AND active = 1';
         $stmt = $this->fsm->prepare($sql);
         $stmt->execute([':id' => $userId]);
         return $stmt->fetchColumn() !== false;
@@ -619,7 +630,7 @@ final class DispoRepository
      */
     public function getTechnicianById(int $technicianId): ?array
     {
-        $sql = 'SELECT id, username, full_name FROM users WHERE id = :id AND role = \'monteur\' AND active = 1';
+        $sql = 'SELECT id, username, full_name FROM users WHERE id = :id AND role IN (\'monteur\',\'kukpit\') AND active = 1';
         $stmt = $this->fsm->prepare($sql);
         $stmt->execute([':id' => $technicianId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -692,7 +703,7 @@ final class DispoRepository
      */
     public function getTechnicianByUsername(string $username): ?array
     {
-        $sql = 'SELECT id, username, full_name FROM users WHERE username = :username AND role = \'monteur\' AND active = 1';
+        $sql = 'SELECT id, username, full_name FROM users WHERE username = :username AND role IN (\'monteur\',\'kukpit\') AND active = 1';
         $stmt = $this->fsm->prepare($sql);
         $stmt->execute([':username' => $username]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);

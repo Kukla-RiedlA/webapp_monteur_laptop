@@ -44,7 +44,35 @@
       rulerOn: 'aktiv – auf die Kurve klicken oder ziehen.',
       truncated: 'Anzeige auf 250000 Zeilen begrenzt.',
       nested: 'Unterordner mitgelesen.',
-      reading: 'Lese Dateien …'
+      reading: 'Lese Dateien …',
+      from: 'Von',
+      to: 'bis',
+      applyRange: 'Übernehmen',
+      rangeAll: 'Gesamt',
+      fromRulers: 'Lineale als Zeit',
+      tableWindow: 'Nur Zeitfenster',
+      basis: 'Auswertung',
+      basisWindow: 'Zeitfenster',
+      basisRulers: 'Zwischen Linealen',
+      vars: 'Variablen',
+      varsAll: 'Alle',
+      varsNone: 'Keine',
+      statVar: 'Variable',
+      statN: 'n',
+      statMean: 'Mittelwert',
+      statStd: 'Std.-Abw.',
+      statMin: 'Min',
+      statMax: 'Max',
+      statMed: 'Median',
+      statSpan: 'Spanne',
+      statDelta: 'Δ',
+      statsTitle: 'Kennwerte im Zeitfenster',
+      statsTitleRulers: 'Kennwerte zwischen den Linealen',
+      statsHintRuler: 'Beide Lineale setzen, sonst gilt das Zeitfenster.',
+      stdHint: 'Stichprobe (n−1)',
+      badTime: 'Zeitfenster nicht lesbar.',
+      needRulers: 'Zuerst beide Lineale setzen.',
+      noStats: 'Keine Werte im gewählten Bereich.'
     },
     en: {
       title: 'CSV log',
@@ -76,7 +104,35 @@
       rulerOn: 'active – click or drag on the curve.',
       truncated: 'Display limited to 250000 rows.',
       nested: 'Subfolders included.',
-      reading: 'Reading files …'
+      reading: 'Reading files …',
+      from: 'From',
+      to: 'to',
+      applyRange: 'Apply',
+      rangeAll: 'Full',
+      fromRulers: 'Rulers as time',
+      tableWindow: 'Time window only',
+      basis: 'Analysis',
+      basisWindow: 'Time window',
+      basisRulers: 'Between rulers',
+      vars: 'Variables',
+      varsAll: 'All',
+      varsNone: 'None',
+      statVar: 'Variable',
+      statN: 'n',
+      statMean: 'Mean',
+      statStd: 'Std. dev.',
+      statMin: 'Min',
+      statMax: 'Max',
+      statMed: 'Median',
+      statSpan: 'Span',
+      statDelta: 'Δ',
+      statsTitle: 'Statistics in the time window',
+      statsTitleRulers: 'Statistics between the rulers',
+      statsHintRuler: 'Set both rulers, otherwise the time window is used.',
+      stdHint: 'Sample (n−1)',
+      badTime: 'Time window could not be read.',
+      needRulers: 'Set both rulers first.',
+      noStats: 'No values in the selected range.'
     }
   };
 
@@ -98,7 +154,13 @@
     hover: -1,
     layout: null,
     bound: false,
-    drag: null
+    drag: null,
+    statBasis: 'window',
+    tableWindowOnly: false,
+    viewStart: 0,
+    viewEnd: 0,
+    cols: [],
+    statsKey: ''
   };
 
   var plotCanvas = null;
@@ -467,6 +529,43 @@
     return (x - xs[i - 1] <= xs[i] - x) ? i - 1 : i;
   }
 
+  function seriesStats(y, i0, i1) {
+    var n = 0;
+    var mean = 0;
+    var m2 = 0;
+    var min = Infinity;
+    var max = -Infinity;
+    var vals = [];
+    var from = i0 < 0 ? 0 : i0;
+    var to = i1 > y.length ? y.length : i1;
+    for (var i = from; i < to; i++) {
+      var v = y[i];
+      if (!isFinite(v)) continue;
+      n++;
+      var delta = v - mean;
+      mean += delta / n;
+      m2 += delta * (v - mean);
+      if (v < min) min = v;
+      if (v > max) max = v;
+      vals.push(v);
+    }
+    if (!n) {
+      return { n: 0, mean: NaN, std: NaN, min: NaN, max: NaN, median: NaN, span: NaN };
+    }
+    vals.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+    var mid = n >> 1;
+    var median = (n % 2) ? vals[mid] : (vals[mid - 1] + vals[mid]) / 2;
+    return {
+      n: n,
+      mean: mean,
+      std: n > 1 ? Math.sqrt(m2 / (n - 1)) : NaN,
+      min: min,
+      max: max,
+      median: median,
+      span: max - min
+    };
+  }
+
   function setStatus(text) {
     var node = el('csvLogStatus');
     if (node) node.textContent = text || '';
@@ -488,7 +587,15 @@
       csvLogRuler1: 'r1',
       csvLogRuler2: 'r2',
       csvLogPrint: 'print',
-      csvLogLang: 'lang'
+      csvLogLang: 'lang',
+      csvLogFromLabel: 'from',
+      csvLogToLabel: 'to',
+      csvLogApplyRange: 'applyRange',
+      csvLogRangeAll: 'rangeAll',
+      csvLogFromRulers: 'fromRulers',
+      csvLogTableWindowLabel: 'tableWindow',
+      csvLogBasisLabel: 'basis',
+      csvLogVarBtn: 'vars'
     };
     Object.keys(map).forEach(function (id) {
       var node = el(id);
@@ -496,7 +603,17 @@
     });
     var view = el('viewCsvLog');
     if (view) view.setAttribute('aria-label', t('title'));
+    var basis = el('csvLogStatBasis');
+    if (basis && basis.options.length >= 2) {
+      basis.options[0].textContent = t('basisWindow');
+      basis.options[1].textContent = t('basisRulers');
+      basis.value = state.statBasis === 'rulers' ? 'rulers' : 'window';
+    }
+    var stdHead = el('csvLogStats');
+    if (stdHead) state.statsKey = '';
+    renderVarMenu();
     updateDelta();
+    renderStats();
     if (state.selected >= 0) setStatus(rowSummary(state.selected));
     else if (state.ruler[0] != null || state.ruler[1] != null) updateRulerStatus();
     else if (!state.rows.length) setStatus(t('ready'));
@@ -621,7 +738,7 @@
     } else {
       setXRange(ext.min - pad, ext.max + pad);
     }
-    renderPlot();
+    renderPlot(true);
   }
 
   function zoomAt(scale, anchor) {
@@ -629,14 +746,14 @@
     var x1 = state.x1;
     var x = anchor == null ? (x0 + x1) / 2 : anchor;
     setXRange(x - (x - x0) * scale, x + (x1 - x) * scale);
-    renderPlot();
+    renderPlot(true);
   }
 
   function panBy(direction) {
     var width = state.x1 - state.x0;
     var shift = width * 0.2 * direction;
     setXRange(state.x0 + shift, state.x1 + shift);
-    renderPlot();
+    renderPlot(true);
   }
 
   function visibleYRange(layout) {
@@ -886,7 +1003,7 @@
     }
   }
 
-  function renderPlot() {
+  function renderPlot(withStats) {
     var canvas = el('csvLogCanvas');
     if (!canvas) return;
     if (!plotCanvas) plotCanvas = document.createElement('canvas');
@@ -897,7 +1014,10 @@
     var ctx = prepareCtx(plotCanvas, layout);
     drawPlot(ctx, layout, themePaint());
     renderOverlay();
+    syncWindow();
+    syncTimeInputs();
     renderRows();
+    if (withStats) renderStats();
   }
 
   function queueRender() {
@@ -918,40 +1038,71 @@
     }).join('');
   }
 
+  function refreshCols() {
+    var hidden = {};
+    state.series.forEach(function (series) {
+      if (!series.visible && series.col != null) hidden[series.col] = 1;
+    });
+    var cols = [];
+    for (var c = 0; c < state.headers.length; c++) {
+      if (!hidden[c]) cols.push(c);
+    }
+    state.cols = cols;
+  }
+
+  function syncWindow() {
+    var count = state.rows.length;
+    if (state.tableWindowOnly && state.nFinite) {
+      state.viewStart = lowerBound(state.xs, state.nFinite, state.x0);
+      state.viewEnd = upperBound(state.xs, state.nFinite, state.x1);
+      if (state.viewEnd < state.viewStart) state.viewEnd = state.viewStart;
+    } else {
+      state.viewStart = 0;
+      state.viewEnd = count;
+    }
+  }
+
   function renderRows() {
     var body = el('csvLogTbody');
     var scroll = el('csvLogTableScroll');
     if (!body || !scroll) return;
-    var count = state.rows.length;
-    if (!count) {
+    syncWindow();
+    if (!state.rows.length) {
       body.innerHTML = '';
       return;
     }
+    var count = Math.max(0, state.viewEnd - state.viewStart);
+    var cols = state.cols.length ? state.cols : [];
+    var span = Math.max(1, cols.length);
     var viewH = scroll.clientHeight || 160;
     var start = Math.max(0, Math.floor(scroll.scrollTop / ROW_H) - 2);
     var vis = Math.ceil(viewH / ROW_H) + 6;
     var end = Math.min(count, start + vis);
     var top = start * ROW_H;
     var bot = Math.max(0, (count - end) * ROW_H);
-    var cols = state.headers.length;
-    var html = '<tr class="csvlog-pad"><td colspan="' + cols + '" style="height:' + top + 'px"></td></tr>';
-    for (var i = start; i < end; i++) {
+    var html = '<tr class="csvlog-pad"><td colspan="' + span + '" style="height:' + top + 'px"></td></tr>';
+    for (var p = start; p < end; p++) {
+      var i = state.viewStart + p;
       var row = state.rows[i];
       html += '<tr data-i="' + i + '"' + (i === state.selected ? ' class="is-selected"' : '') + '>';
-      for (var c = 0; c < cols; c++) html += '<td>' + esc(row.cells[c]) + '</td>';
+      for (var c = 0; c < cols.length; c++) html += '<td>' + esc(row.cells[cols[c]]) + '</td>';
       html += '</tr>';
     }
-    html += '<tr class="csvlog-pad"><td colspan="' + cols + '" style="height:' + bot + 'px"></td></tr>';
+    html += '<tr class="csvlog-pad"><td colspan="' + span + '" style="height:' + bot + 'px"></td></tr>';
     body.innerHTML = html;
   }
 
-  function rebuildTable() {
+  function rebuildTable(keepScroll) {
     var table = el('csvLogTable');
     if (!table) return;
-    var head = state.headers.map(function (name) { return '<th>' + esc(name) + '</th>'; }).join('');
-    table.innerHTML = '<thead><tr>' + head + '</tr></thead><tbody id="csvLogTbody"></tbody>';
+    refreshCols();
     var scroll = el('csvLogTableScroll');
-    if (scroll) scroll.scrollTop = 0;
+    var top = keepScroll && scroll ? scroll.scrollTop : 0;
+    var head = state.cols.map(function (index) {
+      return '<th>' + esc(state.headers[index]) + '</th>';
+    }).join('');
+    table.innerHTML = '<thead><tr>' + head + '</tr></thead><tbody id="csvLogTbody"></tbody>';
+    if (scroll) scroll.scrollTop = top;
     renderRows();
   }
 
@@ -963,13 +1114,17 @@
     if (!fromChart && row && isFinite(row.x) && (row.x < state.x0 || row.x > state.x1)) {
       var width = state.x1 - state.x0;
       setXRange(row.x - width / 2, row.x + width / 2);
-      renderPlot();
+      renderPlot(true);
       return;
     }
     var scroll = el('csvLogTableScroll');
     if (fromChart && scroll) {
-      var target = index * ROW_H - (scroll.clientHeight - ROW_H) / 2;
-      scroll.scrollTop = Math.max(0, target);
+      syncWindow();
+      var pos = index - state.viewStart;
+      if (pos >= 0 && index < state.viewEnd) {
+        var target = pos * ROW_H - (scroll.clientHeight - ROW_H) / 2;
+        scroll.scrollTop = Math.max(0, target);
+      }
     }
     renderRows();
     renderOverlay();
@@ -986,6 +1141,8 @@
     while (state.nFinite < state.xs.length && isFinite(state.xs[state.nFinite])) state.nFinite++;
     var keep = {};
     state.series.forEach(function (series) { keep[series.name] = series.visible; });
+    var headerIndex = {};
+    data.headers.forEach(function (name, index) { headerIndex[name] = index; });
     state.series = data.seriesNames.map(function (name, index) {
       var y = new Float64Array(data.rows.length);
       for (var i = 0; i < data.rows.length; i++) {
@@ -996,6 +1153,7 @@
         name: name,
         color: PALETTE[index % PALETTE.length],
         visible: keep[name] !== false,
+        col: headerIndex[name],
         y: y
       };
     });
@@ -1004,8 +1162,11 @@
     state.selected = -1;
     state.hover = -1;
     state.rulerMode = 0;
+    state.statsKey = '';
     syncRulerButtons();
+    configureTimeInputs();
     renderLegend();
+    renderVarMenu();
     rebuildTable();
     var bits = [state.fileLabel, data.rows.length + ' ' + t('rows')];
     if (data.truncated) bits.push(t('truncated'));
@@ -1208,6 +1369,7 @@
       var xr = state.ruler[drag.slot - 1];
       if (xr != null) selectIndex(nearestIndex(state.xs, state.nFinite, xr), true);
     }
+    renderStats();
   }
 
   function onWheel(ev) {
@@ -1217,7 +1379,7 @@
       var width = state.x1 - state.x0;
       var dir = ev.deltaY > 0 ? 1 : -1;
       setXRange(state.x0 + width * 0.2 * dir, state.x1 + width * 0.2 * dir);
-      renderPlot();
+      renderPlot(true);
       return;
     }
     var scale = ev.deltaY < 0 ? 0.8 : 1.25;
@@ -1236,13 +1398,18 @@
     }
     var delta = el('csvLogDelta') ? el('csvLogDelta').textContent : '';
     var status = el('csvLogStatus') ? el('csvLogStatus').textContent : '';
+    var caption = el('csvLogStatsCaption') ? el('csvLogStatsCaption').textContent : '';
+    var stats = el('csvLogStats');
+    var statsHtml = stats ? stats.outerHTML : '';
     win.document.open();
     win.document.write(
       '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(t('title')) + '</title>' +
       '<style>body{font-family:Segoe UI,sans-serif;color:#1a1a1a;margin:16px}h1{color:#0c6a4d;font-size:18px;margin:0 0 6px}' +
-      '.bar{height:4px;background:#0e7b5a;margin:0 0 12px}p{margin:0 0 8px;color:#5c5c5c}img{max-width:100%;height:auto}</style></head><body>' +
+      '.bar{height:4px;background:#0e7b5a;margin:0 0 12px}p{margin:0 0 8px;color:#5c5c5c}img{max-width:100%;height:auto}' +
+      'table{border-collapse:collapse;margin-top:12px;font-size:12px}th,td{border:1px solid #cfe8d1;padding:4px 8px;text-align:left}' +
+      'th{background:#eefaf5;color:#0c6a4d}</style></head><body>' +
       '<div class="bar"></div><h1>' + esc(t('title')) + '</h1><p>' + esc(status) + '</p><p>' + esc(delta) + '</p>' +
-      '<img alt="" src="' + url + '"></body></html>'
+      '<img alt="" src="' + url + '"><p>' + esc(caption) + '</p>' + statsHtml + '</body></html>'
     );
     win.document.close();
     win.focus();
@@ -1250,6 +1417,261 @@
       try { win.print(); } catch (e) { /* Vorschau bleibt offen */ }
     }, 250);
     setStatus(t('printed'));
+  }
+
+  function formatTimeInput(ms) {
+    if (!isFinite(ms)) return '';
+    if (!state.xIsTime) {
+      var text = String(Math.round(ms * 1000) / 1000);
+      return state.lang === 'de' ? text.replace('.', ',') : text;
+    }
+    var d = new Date(ms);
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) +
+      'T' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds());
+  }
+
+  function clockParts(ms) {
+    var d = new Date(ms);
+    return {
+      date: d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()),
+      time: pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds())
+    };
+  }
+
+  function dataExtent() {
+    if (!state.nFinite) return null;
+    return { min: state.xs[0], max: state.xs[state.nFinite - 1] };
+  }
+
+  function clampToData(ms) {
+    var ext = dataExtent();
+    if (!ext || !isFinite(ms)) return ms;
+    if (ms < ext.min) return ext.min;
+    if (ms > ext.max) return ext.max;
+    return ms;
+  }
+
+  function readTimeInput(value) {
+    var raw = String(value == null ? '' : value).trim();
+    if (!raw) return NaN;
+    if (state.xIsTime) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/.exec(raw);
+      if (!m) return NaN;
+      return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    }
+    var n = parseNumber(raw);
+    return n == null ? NaN : n;
+  }
+
+  function configureTimeInputs() {
+    var timeMode = !!state.xIsTime;
+    ['csvLogFromDate', 'csvLogFromTime', 'csvLogToDate', 'csvLogToTime'].forEach(function (id) {
+      var node = el(id);
+      if (node) node.hidden = !timeMode;
+    });
+    ['csvLogFromNum', 'csvLogToNum'].forEach(function (id) {
+      var num = el(id);
+      if (num) num.hidden = timeMode;
+    });
+  }
+
+  function writeClock(dateId, timeId, numId, ms) {
+    if (!isFinite(ms)) return;
+    if (!state.xIsTime) {
+      var num = el(numId);
+      if (!num || document.activeElement === num) return;
+      num.value = formatTimeInput(ms);
+      return;
+    }
+    var parts = clockParts(ms);
+    var dateNode = el(dateId);
+    var timeNode = el(timeId);
+    if (dateNode && document.activeElement !== dateNode) dateNode.value = parts.date;
+    if (timeNode && document.activeElement !== timeNode) timeNode.value = parts.time;
+  }
+
+  function readClock(dateId, timeId, numId) {
+    if (!state.xIsTime) {
+      var num = el(numId);
+      return readTimeInput(num ? num.value : '');
+    }
+    var dateNode = el(dateId);
+    var timeNode = el(timeId);
+    var date = dateNode ? String(dateNode.value || '') : '';
+    var time = timeNode && timeNode.value ? String(timeNode.value) : '00:00:00';
+    if (time.length === 5) time += ':00';
+    if (!date) return NaN;
+    return readTimeInput(date + 'T' + time);
+  }
+
+  function orientDateInputs() {
+    var ext = state.xIsTime ? dataExtent() : null;
+    var oldest = ext ? clockParts(ext.min).date : '';
+    var youngest = ext ? clockParts(ext.max).date : '';
+    ['csvLogFromDate', 'csvLogToDate'].forEach(function (id) {
+      var node = el(id);
+      if (!node) return;
+      if (!oldest) {
+        node.removeAttribute('min');
+        node.removeAttribute('max');
+        return;
+      }
+      node.min = oldest;
+      node.max = youngest;
+    });
+    var fromTime = el('csvLogFromTime');
+    var toTime = el('csvLogToTime');
+    if (fromTime) fromTime.removeAttribute('min');
+    if (toTime) toTime.removeAttribute('max');
+    if (ext && oldest && oldest === youngest) {
+      if (fromTime) fromTime.min = clockParts(ext.min).time;
+      if (toTime) toTime.max = clockParts(ext.max).time;
+    }
+  }
+
+  function syncTimeInputs() {
+    orientDateInputs();
+    if (!state.nFinite) return;
+    writeClock('csvLogFromDate', 'csvLogFromTime', 'csvLogFromNum', clampToData(state.x0));
+    writeClock('csvLogToDate', 'csvLogToTime', 'csvLogToNum', clampToData(state.x1));
+  }
+
+  function applyTimeInputs() {
+    var a = readClock('csvLogFromDate', 'csvLogFromTime', 'csvLogFromNum');
+    var b = readClock('csvLogToDate', 'csvLogToTime', 'csvLogToNum');
+    if (!isFinite(a) || !isFinite(b)) {
+      setStatus(t('badTime'));
+      return;
+    }
+    setXRange(clampToData(Math.min(a, b)), clampToData(Math.max(a, b)));
+    renderPlot(true);
+  }
+
+  function rangeFromRulers() {
+    if (state.ruler[0] == null || state.ruler[1] == null) {
+      setStatus(t('needRulers'));
+      return;
+    }
+    setXRange(Math.min(state.ruler[0], state.ruler[1]), Math.max(state.ruler[0], state.ruler[1]));
+    renderPlot(true);
+  }
+
+  function statRange() {
+    var rulersReady = state.statBasis === 'rulers' && state.ruler[0] != null && state.ruler[1] != null && state.nFinite;
+    if (rulersReady) {
+      var a = Math.min(state.ruler[0], state.ruler[1]);
+      var b = Math.max(state.ruler[0], state.ruler[1]);
+      return {
+        i0: lowerBound(state.xs, state.nFinite, a),
+        i1: upperBound(state.xs, state.nFinite, b),
+        mode: 'rulers'
+      };
+    }
+    if (!state.nFinite) return { i0: 0, i1: 0, mode: 'window' };
+    return {
+      i0: lowerBound(state.xs, state.nFinite, state.x0),
+      i1: upperBound(state.xs, state.nFinite, state.x1),
+      mode: 'window'
+    };
+  }
+
+  function formatStat(n) {
+    return isFinite(n) ? formatNum(n) : '—';
+  }
+
+  function renderVarMenu() {
+    var menu = el('csvLogVarMenu');
+    if (!menu) return;
+    var html = '<div class="csvlog-varactions">' +
+      '<button type="button" class="btn btn-ghost" data-var="all">' + esc(t('varsAll')) + '</button>' +
+      '<button type="button" class="btn btn-ghost" data-var="none">' + esc(t('varsNone')) + '</button></div>';
+    state.series.forEach(function (series, index) {
+      html += '<label class="csvlog-varitem"><input type="checkbox" data-series="' + index + '"' +
+        (series.visible ? ' checked' : '') + '>' +
+        '<span class="csvlog-swatch" style="background:' + series.color + '"></span>' +
+        esc(series.name) + '</label>';
+    });
+    if (!state.series.length) html += '<p class="csvlog-varempty">' + esc(t('empty')) + '</p>';
+    menu.innerHTML = html;
+  }
+
+  function setSeriesVisible(index, visible) {
+    if (!state.series[index]) return;
+    state.series[index].visible = !!visible;
+    renderLegend();
+    renderVarMenu();
+    rebuildTable(true);
+    renderPlot(true);
+  }
+
+  function setAllSeries(visible) {
+    state.series.forEach(function (series) { series.visible = visible; });
+    renderLegend();
+    renderVarMenu();
+    rebuildTable(true);
+    renderPlot(true);
+  }
+
+  function renderStats() {
+    var table = el('csvLogStats');
+    var caption = el('csvLogStatsCaption');
+    if (!table) return;
+    var range = statRange();
+    var wantRulers = state.statBasis === 'rulers';
+    var usedRulers = range.mode === 'rulers';
+    var vis = state.series.map(function (series) { return series.visible ? '1' : '0'; }).join('');
+    var key = range.i0 + ':' + range.i1 + ':' + range.mode + ':' + vis + ':' +
+      (state.ruler[0] == null ? '' : state.ruler[0]) + ':' +
+      (state.ruler[1] == null ? '' : state.ruler[1]) + ':' + state.lang;
+    if (key === state.statsKey) return;
+    state.statsKey = key;
+    if (caption) {
+      var title = usedRulers ? t('statsTitleRulers') : t('statsTitle');
+      if (wantRulers && !usedRulers) title += ' · ' + t('statsHintRuler');
+      caption.textContent = title;
+    }
+    var head = '<thead><tr>' +
+      '<th>' + esc(t('statVar')) + '</th>' +
+      '<th>' + esc(t('statN')) + '</th>' +
+      '<th>' + esc(t('statMean')) + '</th>' +
+      '<th title="' + esc(t('stdHint')) + '">' + esc(t('statStd')) + '</th>' +
+      '<th>' + esc(t('statMin')) + '</th>' +
+      '<th>' + esc(t('statMax')) + '</th>' +
+      '<th>' + esc(t('statMed')) + '</th>' +
+      '<th>' + esc(t('statSpan')) + '</th>' +
+      '<th>' + esc(t('statDelta')) + '</th>' +
+      '</tr></thead>';
+    var body = '';
+    var shown = 0;
+    var iR1 = -1;
+    var iR2 = -1;
+    if (state.nFinite && state.ruler[0] != null && state.ruler[1] != null) {
+      iR1 = nearestIndex(state.xs, state.nFinite, state.ruler[0]);
+      iR2 = nearestIndex(state.xs, state.nFinite, state.ruler[1]);
+    }
+    state.series.forEach(function (series) {
+      if (!series.visible) return;
+      shown++;
+      var stats = seriesStats(series.y, range.i0, range.i1);
+      var delta = NaN;
+      if (iR1 >= 0 && iR2 >= 0 && isFinite(series.y[iR1]) && isFinite(series.y[iR2])) {
+        delta = series.y[iR2] - series.y[iR1];
+      }
+      body += '<tr><td>' + esc(series.name) + '</td><td>' + (stats.n ? String(stats.n) : '—') + '</td>' +
+        '<td>' + formatStat(stats.mean) + '</td>' +
+        '<td>' + formatStat(stats.std) + '</td>' +
+        '<td>' + formatStat(stats.min) + '</td>' +
+        '<td>' + formatStat(stats.max) + '</td>' +
+        '<td>' + formatStat(stats.median) + '</td>' +
+        '<td>' + formatStat(stats.span) + '</td>' +
+        '<td>' + formatStat(delta) + '</td></tr>';
+    });
+    if (!shown) {
+      body = '<tr><td colspan="9">' + esc(state.series.length ? t('noneOn') : t('noStats')) + '</td></tr>';
+    } else if (range.i1 <= range.i0) {
+      body = '<tr><td colspan="9">' + esc(t('noStats')) + '</td></tr>';
+    }
+    table.innerHTML = head + '<tbody>' + body + '</tbody>';
   }
 
   function bindClick(id, fn) {
@@ -1298,11 +1720,72 @@
     bindClick('csvLogRuler1', function () { setRulerMode(1); });
     bindClick('csvLogRuler2', function () { setRulerMode(2); });
     bindClick('csvLogPrint', printView);
+    bindClick('csvLogApplyRange', applyTimeInputs);
+    bindClick('csvLogRangeAll', autoScale);
+    bindClick('csvLogFromRulers', rangeFromRulers);
     bindClick('csvLogLang', function () {
       state.lang = state.lang === 'de' ? 'en' : 'de';
       try { localStorage.setItem('kukpit_csvlog_lang', state.lang); } catch (e) { /* ignorieren */ }
       applyLang();
-      renderPlot();
+      renderPlot(true);
+    });
+
+    ['csvLogFromDate', 'csvLogFromTime', 'csvLogFromNum', 'csvLogToDate', 'csvLogToTime', 'csvLogToNum'].forEach(function (id) {
+      var node = el(id);
+      if (!node) return;
+      node.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          applyTimeInputs();
+        }
+      });
+    });
+    var basis = el('csvLogStatBasis');
+    if (basis) {
+      basis.addEventListener('change', function () {
+        state.statBasis = basis.value === 'rulers' ? 'rulers' : 'window';
+        state.statsKey = '';
+        renderStats();
+      });
+    }
+    var tableWindow = el('csvLogTableWindow');
+    if (tableWindow) {
+      tableWindow.addEventListener('change', function () {
+        state.tableWindowOnly = !!tableWindow.checked;
+        syncWindow();
+        var scroll = el('csvLogTableScroll');
+        if (scroll) scroll.scrollTop = 0;
+        renderRows();
+      });
+    }
+    bindClick('csvLogVarBtn', function (ev) {
+      ev.stopPropagation();
+      var menu = el('csvLogVarMenu');
+      if (!menu) return;
+      menu.hidden = !menu.hidden;
+      ev.currentTarget.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
+    });
+    var varMenu = el('csvLogVarMenu');
+    if (varMenu) {
+      varMenu.addEventListener('change', function (ev) {
+        var input = ev.target;
+        if (!input || input.getAttribute('data-series') == null) return;
+        setSeriesVisible(parseInt(input.getAttribute('data-series'), 10), input.checked);
+      });
+      varMenu.addEventListener('click', function (ev) {
+        var btn = ev.target.closest ? ev.target.closest('[data-var]') : null;
+        if (!btn) return;
+        ev.stopPropagation();
+        setAllSeries(btn.getAttribute('data-var') === 'all');
+      });
+    }
+    document.addEventListener('click', function (ev) {
+      var menu = el('csvLogVarMenu');
+      var btn = el('csvLogVarBtn');
+      if (!menu || menu.hidden) return;
+      if (menu.contains(ev.target) || (btn && btn.contains(ev.target))) return;
+      menu.hidden = true;
+      if (btn) btn.setAttribute('aria-expanded', 'false');
     });
 
     var legend = el('csvLogLegend');
@@ -1312,9 +1795,7 @@
         if (!btn) return;
         var index = parseInt(btn.getAttribute('data-series'), 10);
         if (!state.series[index]) return;
-        state.series[index].visible = !state.series[index].visible;
-        renderLegend();
-        renderPlot();
+        setSeriesVisible(index, !state.series[index].visible);
       });
     }
 
@@ -1375,7 +1856,7 @@
 
   function openTool() {
     bindOnce();
-    requestAnimationFrame(function () { renderPlot(); });
+    requestAnimationFrame(function () { renderPlot(true); });
   }
 
   function install() {
@@ -1392,6 +1873,7 @@
     parseStamp: parseStamp,
     buildDataset: buildDataset,
     nearestIndex: nearestIndex,
-    lowerBound: lowerBound
+    lowerBound: lowerBound,
+    seriesStats: seriesStats
   };
 });

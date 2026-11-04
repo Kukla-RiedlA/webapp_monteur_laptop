@@ -77,6 +77,44 @@ eq(api.nearestIndex(xs, 4, 26), 2, 'closer to 30');
 eq(api.nearestIndex(xs, 4, -5), 0, 'below range');
 eq(api.nearestIndex(xs, 4, 99), 3, 'above range');
 
+function near(actual, expected, label) {
+  assert.ok(Math.abs(actual - expected) < 1e-9, label + ' — got ' + actual + ' expected ' + expected);
+}
+
+var s3 = api.seriesStats(new Float64Array([1, 2, 3]), 0, 3);
+eq(s3.n, 3, 'count of 1..3');
+near(s3.mean, 2, 'mean of 1..3');
+near(s3.std, 1, 'sample std of 1..3');
+near(s3.min, 1, 'min');
+near(s3.max, 3, 'max');
+near(s3.median, 2, 'odd median');
+near(s3.span, 2, 'span');
+
+var s4 = api.seriesStats(new Float64Array([1, 2, 3, 4]), 0, 4);
+near(s4.mean, 2.5, 'mean of 1..4');
+near(s4.median, 2.5, 'even median');
+near(s4.std, Math.sqrt(5 / 3), 'sample std of 1..4');
+
+var sPart = api.seriesStats(new Float64Array([1, NaN, 3, 5, 100]), 0, 4);
+eq(sPart.n, 3, 'NaN skipped and end excluded');
+near(sPart.mean, 3, 'mean of 1,3,5');
+near(sPart.std, 2, 'sample std of 1,3,5');
+near(sPart.median, 3, 'median of 1,3,5');
+
+var sConst = api.seriesStats(new Float64Array([5, 5, 5]), 0, 3);
+near(sConst.std, 0, 'constant std is 0');
+near(sConst.span, 0, 'constant span is 0');
+
+var sOne = api.seriesStats(new Float64Array([4]), 0, 1);
+eq(sOne.n, 1, 'single sample');
+near(sOne.mean, 4, 'single mean');
+near(sOne.median, 4, 'single median');
+assert.ok(!isFinite(sOne.std), 'single sample has no std');
+
+var sEmpty = api.seriesStats(new Float64Array([NaN, NaN]), 0, 2);
+eq(sEmpty.n, 0, 'empty stats');
+assert.ok(!isFinite(sEmpty.mean), 'empty mean');
+
 var none = api.buildDataset([{ name: 'x.csv', text: 'Name;Ort\nA;B\n' }]);
 assert.strictEqual(none.ok, false);
 eq(none.error, 'nonum', 'text only');

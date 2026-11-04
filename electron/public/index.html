@@ -36,7 +36,7 @@
   <link rel="stylesheet" href="css/file_preview_hover.css?v=20260908hover">
   <link rel="stylesheet" href="css/zeitschreibung-web-parity.css?v=20261002save">
   <link rel="stylesheet" href="css/hinweise.css?v=20260902files">
-  <link rel="stylesheet" href="css/csv-log-viewer.css?v=20261014">
+  <link rel="stylesheet" href="css/csv-log-viewer.css?v=20261104c">
   <link rel="stylesheet" href="css/kukpit-shell.css?v=20261009toolbar">
   <style>
     * { box-sizing: border-box; }
@@ -4036,8 +4036,40 @@
           </div>
           <div id="csvLogLegend" class="csvlog-legend"></div>
         </div>
-        <div class="csvlog-table-scroll" id="csvLogTableScroll">
-          <table class="csvlog-table" id="csvLogTable"></table>
+        <div class="csvlog-tablepane">
+          <div class="csvlog-tablebar">
+            <label class="csvlog-field"><span id="csvLogFromLabel">Von</span>
+              <input id="csvLogFromDate" type="date" aria-label="Von Datum">
+              <input id="csvLogFromTime" type="time" step="1" aria-label="Von Uhrzeit">
+              <input id="csvLogFromNum" type="text" inputmode="decimal" hidden aria-label="Von">
+            </label>
+            <label class="csvlog-field"><span id="csvLogToLabel">bis</span>
+              <input id="csvLogToDate" type="date" aria-label="Bis Datum">
+              <input id="csvLogToTime" type="time" step="1" aria-label="Bis Uhrzeit">
+              <input id="csvLogToNum" type="text" inputmode="decimal" hidden aria-label="bis">
+            </label>
+            <button type="button" class="btn btn-primary" id="csvLogApplyRange">Übernehmen</button>
+            <button type="button" class="btn btn-ghost" id="csvLogRangeAll">Gesamt</button>
+            <button type="button" class="btn btn-ghost" id="csvLogFromRulers">Lineale als Zeit</button>
+            <label class="csvlog-check"><input type="checkbox" id="csvLogTableWindow"> <span id="csvLogTableWindowLabel">Nur Zeitfenster</span></label>
+            <label class="csvlog-field"><span id="csvLogBasisLabel">Auswertung</span>
+              <select id="csvLogStatBasis">
+                <option value="window">Zeitfenster</option>
+                <option value="rulers">Zwischen Linealen</option>
+              </select>
+            </label>
+            <div class="csvlog-varpick">
+              <button type="button" class="btn btn-ghost" id="csvLogVarBtn" aria-expanded="false" aria-controls="csvLogVarMenu">Variablen</button>
+              <div id="csvLogVarMenu" class="csvlog-varmenu" hidden></div>
+            </div>
+          </div>
+          <p class="csvlog-stats-caption" id="csvLogStatsCaption">Kennwerte im Zeitfenster</p>
+          <div class="csvlog-stats-scroll" id="csvLogStatsScroll">
+            <table class="csvlog-stats" id="csvLogStats"></table>
+          </div>
+          <div class="csvlog-table-scroll" id="csvLogTableScroll">
+            <table class="csvlog-table" id="csvLogTable"></table>
+          </div>
         </div>
       </div>
       <div class="csvlog-status" id="csvLogStatus">Bereit</div>
@@ -5626,7 +5658,7 @@
   <script src="js/profinet-tool.js?v=20261022-blink"></script>
   <script src="js/tools-vnc.js?v=20261014"></script>
   <script src="js/ftp-tool.js?v=20261019b"></script>
-  <script src="js/csv-log-viewer.js?v=20261014"></script>
+  <script src="js/csv-log-viewer.js?v=20261104c"></script>
   <script src="js/opcg-tool.js?v=20261101c"></script>
   <script src="assets/js/dispo/anlagenstamm-profinet.js?v=20261019-name"></script>
   <script src="js/hinweis-lamp.js?v=20260902files"></script>

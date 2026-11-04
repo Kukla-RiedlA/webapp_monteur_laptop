@@ -1,5 +1,9 @@
 # Versionshistorie – Monteur WebApp
 
+## V 3.000.011
+- **KUKpit intern:** Lokale Auftrags-API akzeptiert die neue Benutzer-Ebene neben Monteuren. Abwesenheit bleibt beim Monteur.
+- **CSV-Log:** Zeitfenster, Kennwerte und Variablenauswahl in der Log-Ansicht.
+
 ## V 3.000.009
 - **Projektdateien:** Wolke heißt nur online, grünes Häkchen im grünen Kreis heißt offline. Das gilt für Anlagenstamm, Auftrag und die beim Annehmen gewählten PROJEKTE-NEU-Dateien.
 - **TED:** Die mechanische Berechnung des ganzen Anlagenstamms lädt im Hintergrund und blockiert den übrigen Sync nicht. Auf der Auftragsseite steht „Mechanische Berechnung:“, ein grünes Häkchen öffnet die lokale Datei.

@@ -16,7 +16,7 @@ if ($technicianId === null) {
 }
 
 $repo = new DispoRepository(Db::fsm());
-if (!$repo->isTechnician($technicianId)) {
+if (!$repo->isMonteurResource($technicianId)) {
     http_response_code(403);
     echo json_encode(['ok' => false, 'error' => 'Kein gültiger Monteur.'], JSON_UNESCAPED_UNICODE);
     exit;
