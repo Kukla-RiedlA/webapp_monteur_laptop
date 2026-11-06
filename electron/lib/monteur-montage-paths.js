@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {
@@ -749,11 +750,102 @@ function uniqueDestPath(dst) {
   return path.join(dir, base + '_' + Date.now() + ext);
 }
 
+function fileSha256(abs) {
+  const hash = crypto.createHash('sha256');
+  const fd = fs.openSync(abs, 'r');
+  try {
+    const buf = Buffer.alloc(1024 * 1024);
+    let n = 0;
+    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+      hash.update(n === buf.length ? buf : buf.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest('hex');
+}
+
+function filesSameBytes(a, b) {
+  try {
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    if (!sa.isFile() || !sb.isFile() || sa.size !== sb.size) return false;
+    if (sa.size === 0) return true;
+    return fileSha256(a) === fileSha256(b);
+  } catch (_) {
+    return false;
+  }
+}
+
+/** PWA-Kamera: FN_YYYY-MM-DD_HH-MM-SS.ext — die Uhrzeit ist keine Kopie. */
+function parsePhotoCopyName(name) {
+  const n = String(name || '');
+  if (/_\d{2}-\d{2}-\d{2}\.[^.]+$/i.test(n)) return null;
+  let m = n.match(/^(.*)_(\d{1,4})(\.[^.]+)$/);
+  if (m && parseInt(m[2], 10) >= 2) return m[1] + m[3];
+  m = n.match(/^(.*)-(\d{1,3})(\.[^.]+)$/);
+  if (m && parseInt(m[2], 10) >= 1) return m[1] + m[3];
+  return null;
+}
+
+function pathHasBilderSegment(abs) {
+  return String(abs || '')
+    .split(/[/\\]/)
+    .some((part) => part.toLowerCase() === 'bilder');
+}
+
+function unlinkQuiet(abs) {
+  try {
+    fs.unlinkSync(abs);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Entfernt im Bilder-Baum Dateien `name_2.ext` / `name-1.ext`, deren Bytes dem Original entsprechen.
+ * Abweichende Inhalte bleiben.
+ */
+function pruneIdenticalPhotoCopies(rootDir) {
+  if (!rootDir || !fs.existsSync(rootDir)) return;
+  const stack = [rootDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory() || isIgnorableDirEntry(ent.name)) continue;
+      stack.push(path.join(dir, ent.name));
+    }
+    if (!pathHasBilderSegment(dir)) continue;
+    const files = [];
+    for (const ent of entries) {
+      if (!ent.isFile()) continue;
+      files.push(ent.name);
+    }
+    const byLower = new Map(files.map((name) => [name.toLowerCase(), name]));
+    for (const name of files) {
+      const canonical = parsePhotoCopyName(name);
+      if (!canonical) continue;
+      const keeper = byLower.get(canonical.toLowerCase());
+      if (!keeper || keeper === name) continue;
+      const src = path.join(dir, name);
+      if (filesSameBytes(src, path.join(dir, keeper))) unlinkQuiet(src);
+    }
+  }
+}
+
 /**
  * @param {string} srcDir
  * @param {string} dstDir
  * @param {{ uniqueOnCollision?: boolean }} [mergeOpts]
- * uniqueOnCollision legt eine schon vorhandene Datei unter einem freien Namen ab, statt sie liegen zu lassen.
+ * uniqueOnCollision legt eine schon vorhandene Datei unter einem freien Namen ab, wenn der Inhalt abweicht.
+ * Gleiche Bytes werden nicht noch einmal als name_2, name_3, … abgelegt.
  */
 function mergeDirContentsInto(srcDir, dstDir, mergeOpts) {
   const uniqueOnCollision = !!(mergeOpts && mergeOpts.uniqueOnCollision);
@@ -783,7 +875,11 @@ function mergeDirContentsInto(srcDir, dstDir, mergeOpts) {
         } else if (!fs.existsSync(dst)) {
           await renameAsync(src, dst);
         } else if (uniqueOnCollision && fs.statSync(dst).isFile()) {
-          await renameAsync(src, uniqueDestPath(dst));
+          if (filesSameBytes(src, dst)) {
+            await fs.promises.unlink(src);
+          } else {
+            await renameAsync(src, uniqueDestPath(dst));
+          }
         }
       } catch (err) {
         console.warn('[monteur-paths] merge', src, '->', dst, err && err.message ? err.message : err);
@@ -1321,6 +1417,7 @@ async function alignMonteurMontageDirs(reiseDir, _fabFolderEntries, desiredName,
       else leftover.push(oldName);
       await yieldEventLoop();
     }
+    if (fs.existsSync(desiredPath)) pruneIdenticalPhotoCopies(desiredPath);
   }
   return { desired, renamed, leftover };
 }

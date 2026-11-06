@@ -169,6 +169,52 @@ describe('monteur-montage-paths lazy mkdir', () => {
     assert.equal(fs.readFileSync(path.join(bilder, 'gleich_2.jpg'), 'utf8'), 'im-alten');
   });
 
+  it('align kopiert gleiche PWA-Fotos nicht als name_2', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const oldAo = '2026-10-27_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const photo = '12481_2026-10-27_14-30-00.jpg';
+    const bytes = Buffer.from('jpeg-bytes-same');
+    fs.mkdirSync(path.join(montage, desired, 'Bilder', 'Allgemein'), { recursive: true });
+    fs.writeFileSync(path.join(montage, desired, 'Bilder', 'Allgemein', photo), bytes);
+    fs.mkdirSync(path.join(montage, oldAo, 'Bilder', 'Allgemein'), { recursive: true });
+    fs.writeFileSync(path.join(montage, oldAo, 'Bilder', 'Allgemein', photo), bytes);
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    const bilder = path.join(montage, desired, 'Bilder', 'Allgemein');
+    assert.equal(fs.existsSync(path.join(montage, oldAo)), false);
+    assert.equal(fs.existsSync(path.join(bilder, photo.replace('.jpg', '_2.jpg'))), false);
+    assert.equal(fs.readFileSync(path.join(bilder, photo)).equals(bytes), true);
+    assert.equal(fs.readdirSync(bilder).length, 1);
+  });
+
+  it('align entfernt schon vorhandene identische Foto-Kopien im Bilder-Ordner', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const photo = '12481_2026-10-27_14-30-00.jpg';
+    const bilder = path.join(montage, desired, 'Bilder', 'Allgemein');
+    const bytes = Buffer.from('jpeg-bytes-same');
+    fs.mkdirSync(bilder, { recursive: true });
+    fs.writeFileSync(path.join(bilder, photo), bytes);
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-27_14-30-00_2.jpg'), bytes);
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-27_14-30-00_48.jpg'), bytes);
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-27_14-30-00-1.jpg'), bytes);
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-27_14-30-00_3.jpg'), Buffer.from('anderes-bild'));
+
+    await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    const left = fs.readdirSync(bilder).sort();
+    assert.deepEqual(left, [photo, '12481_2026-10-27_14-30-00_3.jpg']);
+    assert.equal(fs.readFileSync(path.join(bilder, '12481_2026-10-27_14-30-00_3.jpg'), 'utf8'), 'anderes-bild');
+  });
+
   it('align lässt einen anderen Kundenrest bei anderem Datum stehen', async () => {
     const fn = '12481_Certain_Teed';
     const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
