@@ -215,6 +215,26 @@ describe('monteur-montage-paths lazy mkdir', () => {
     assert.equal(fs.readFileSync(path.join(bilder, '12481_2026-10-27_14-30-00_3.jpg'), 'utf8'), 'anderes-bild');
   });
 
+  it('align zieht nummerierte Kopien zusammen, wenn das Original fehlt', async () => {
+    const fn = '12481_Certain_Teed';
+    const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');
+    const desired = '2026-10-28_Certain_Teed_LLC_LAnse_US_Riedl_Alois';
+    const bilder = path.join(montage, desired, 'Bilder');
+    const bytes = Buffer.from('jpeg-bytes-same');
+    fs.mkdirSync(bilder, { recursive: true });
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-29_11-35-37_02_2.jpg'), bytes);
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-29_11-35-37_02_10.jpg'), bytes);
+    fs.writeFileSync(path.join(bilder, '12481_2026-10-29_11-35-37_02_340.jpg'), bytes);
+
+    const result = await alignMonteurMontageDirs(reiseDir, [{ fab: '12481', folder_name_canonical: fn }], desired, {
+      technicianDisplayName: 'Riedl Alois',
+    });
+
+    assert.deepEqual(fs.readdirSync(bilder), ['12481_2026-10-29_11-35-37_02.jpg']);
+    assert.equal(fs.readFileSync(path.join(bilder, '12481_2026-10-29_11-35-37_02.jpg')).equals(bytes), true);
+    assert.ok(result.removedPhotos.length >= 2);
+  });
+
   it('align lässt einen anderen Kundenrest bei anderem Datum stehen', async () => {
     const fn = '12481_Certain_Teed';
     const montage = path.join(reiseDir, 'Dokumente_Monteur', fn, 'Montage');

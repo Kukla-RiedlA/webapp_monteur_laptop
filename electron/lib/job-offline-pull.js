@@ -63,6 +63,49 @@ function ensureJobOfflinePullSchema(db) {
   db.prepare(
     'CREATE INDEX IF NOT EXISTS idx_job_offline_pull_paths_job ON job_offline_pull_paths(local_job_id)',
   ).run();
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS photo_duplicate_deletes (
+      local_job_id INTEGER NOT NULL,
+      rel_path TEXT NOT NULL,
+      created_at TEXT,
+      PRIMARY KEY (local_job_id, rel_path)
+    )`,
+  ).run();
+}
+
+function queuePhotoDuplicateDeletes(db, localJobId, relPaths) {
+  ensureJobOfflinePullSchema(db);
+  const jobId = parseInt(localJobId, 10);
+  if (!Number.isFinite(jobId) || jobId <= 0) return;
+  const insert = db.prepare(
+    `INSERT INTO photo_duplicate_deletes (local_job_id, rel_path, created_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(local_job_id, rel_path) DO NOTHING`,
+  );
+  const now = new Date().toISOString();
+  for (const rel of relPaths || []) {
+    const norm = normRelPath(rel);
+    if (!norm || norm.includes('..')) continue;
+    insert.run(jobId, norm, now);
+  }
+}
+
+function listPhotoDuplicateDeletes(db, localJobId) {
+  ensureJobOfflinePullSchema(db);
+  const jobId = parseInt(localJobId, 10);
+  if (!Number.isFinite(jobId) || jobId <= 0) return [];
+  return db
+    .prepare(`SELECT rel_path FROM photo_duplicate_deletes WHERE local_job_id = ? ORDER BY rel_path`)
+    .all(jobId)
+    .map((row) => String(row.rel_path || ''))
+    .filter(Boolean);
+}
+
+function forgetPhotoDuplicateDelete(db, localJobId, relPath) {
+  const jobId = parseInt(localJobId, 10);
+  const norm = normRelPath(relPath);
+  if (!Number.isFinite(jobId) || jobId <= 0 || !norm) return;
+  db.prepare(`DELETE FROM photo_duplicate_deletes WHERE local_job_id = ? AND rel_path = ?`).run(jobId, norm);
 }
 
 function normRelPath(p) {
@@ -383,6 +426,9 @@ function removeOfflinePullFab(db, localJobId, fab) {
 
 module.exports = {
   ensureJobOfflinePullSchema,
+  queuePhotoDuplicateDeletes,
+  listPhotoDuplicateDeletes,
+  forgetPhotoDuplicateDelete,
   getOfflinePullConfig,
   getOfflinePullPathsByFab,
   findFabForCanonicalFolder,

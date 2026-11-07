@@ -803,12 +803,24 @@ function unlinkQuiet(abs) {
   }
 }
 
+const PHOTO_FILE_RE = /\.(jpe?g|png|webp|heic)$/i;
+
+function photoCopyRank(name) {
+  const canonical = parsePhotoCopyName(name);
+  if (!canonical) return { copy: false, n: 0, canonical: String(name || '') };
+  const m =
+    String(name).match(/^(.*)_(\d{1,4})(\.[^.]+)$/) || String(name).match(/^(.*)-(\d{1,3})(\.[^.]+)$/);
+  return { copy: true, n: m ? parseInt(m[2], 10) : 9999, canonical };
+}
+
 /**
- * Entfernt im Bilder-Baum Dateien `name_2.ext` / `name-1.ext`, deren Bytes dem Original entsprechen.
- * Abweichende Inhalte bleiben.
+ * Im Bilder-Baum bleibt von bytegleichen Fotos eine Datei.
+ * Fehlt das Original (`name.jpg`) und es liegen nur `name_2`, `name_10`, … da, wird die niedrigste Kopie auf den Originalnamen zurückbenannt.
+ * @returns {string[]} absolute Pfade der entfernten Kopien
  */
 function pruneIdenticalPhotoCopies(rootDir) {
-  if (!rootDir || !fs.existsSync(rootDir)) return;
+  const removed = [];
+  if (!rootDir || !fs.existsSync(rootDir)) return removed;
   const stack = [rootDir];
   while (stack.length) {
     const dir = stack.pop();
@@ -825,19 +837,55 @@ function pruneIdenticalPhotoCopies(rootDir) {
     if (!pathHasBilderSegment(dir)) continue;
     const files = [];
     for (const ent of entries) {
-      if (!ent.isFile()) continue;
+      if (!ent.isFile() || !PHOTO_FILE_RE.test(ent.name)) continue;
       files.push(ent.name);
     }
-    const byLower = new Map(files.map((name) => [name.toLowerCase(), name]));
+    const byHash = new Map();
     for (const name of files) {
-      const canonical = parsePhotoCopyName(name);
-      if (!canonical) continue;
-      const keeper = byLower.get(canonical.toLowerCase());
-      if (!keeper || keeper === name) continue;
-      const src = path.join(dir, name);
-      if (filesSameBytes(src, path.join(dir, keeper))) unlinkQuiet(src);
+      let hash = '';
+      try {
+        hash = fileSha256(path.join(dir, name));
+      } catch (_) {
+        continue;
+      }
+      if (!byHash.has(hash)) byHash.set(hash, []);
+      byHash.get(hash).push(name);
+    }
+    for (const names of byHash.values()) {
+      if (names.length < 2) continue;
+      const ranked = names
+        .map((name) => ({ name, rank: photoCopyRank(name) }))
+        .sort((a, b) => {
+          if (a.rank.copy !== b.rank.copy) return a.rank.copy ? 1 : -1;
+          if (a.rank.n !== b.rank.n) return a.rank.n - b.rank.n;
+          return a.name.length - b.name.length;
+        });
+      let keeper = ranked[0].name;
+      const keeperRank = ranked[0].rank;
+      if (keeperRank.copy && keeperRank.canonical && keeperRank.canonical !== keeper) {
+        const destName = keeperRank.canonical;
+        const dest = path.join(dir, destName);
+        const takenInGroup = names.some((n) => n.toLowerCase() === destName.toLowerCase());
+        if (!takenInGroup && !fs.existsSync(dest)) {
+          try {
+            fs.renameSync(path.join(dir, keeper), dest);
+            removed.push(path.join(dir, keeper));
+            keeper = destName;
+          } catch (_) {
+            /* Kopie behält den nummerierten Namen */
+          }
+        }
+      }
+      const keeperLower = keeper.toLowerCase();
+      for (const name of names) {
+        if (name.toLowerCase() === keeperLower) continue;
+        const abs = path.join(dir, name);
+        if (!fs.existsSync(abs)) continue;
+        if (unlinkQuiet(abs)) removed.push(abs);
+      }
     }
   }
+  return removed;
 }
 
 /**
@@ -1417,9 +1465,13 @@ async function alignMonteurMontageDirs(reiseDir, _fabFolderEntries, desiredName,
       else leftover.push(oldName);
       await yieldEventLoop();
     }
-    if (fs.existsSync(desiredPath)) pruneIdenticalPhotoCopies(desiredPath);
   }
-  return { desired, renamed, leftover };
+  const removedPhotos = [];
+  for (const abs of pruneIdenticalPhotoCopies(monteurBase)) {
+    const rel = path.relative(reiseDir, abs).replace(/\\/g, '/');
+    if (rel && !rel.startsWith('..')) removedPhotos.push(rel);
+  }
+  return { desired, renamed, leftover, removedPhotos };
 }
 
 /**
@@ -1560,6 +1612,7 @@ module.exports = {
   ensureCanonicalFnFolders,
   ensureMonteurMontageDirs,
   alignMonteurMontageDirs,
+  pruneIdenticalPhotoCopies,
   isMonteurMontageIdentitySibling,
   isMonteurMontageDateTailSibling,
   removeLegacyMonteurAuftragsordnerTopLevel,

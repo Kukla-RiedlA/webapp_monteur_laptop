@@ -203,6 +203,9 @@ const { fnProtocolPdfFilename, serviceLikePdfKind, labeledProtocolPdfFilename } 
 const kundenDokumentation = require('./lib/kunden-dokumentation');
 const {
   ensureJobOfflinePullSchema,
+  queuePhotoDuplicateDeletes,
+  listPhotoDuplicateDeletes,
+  forgetPhotoDuplicateDelete,
   getOfflinePullConfig,
   getOfflinePullPathsByFab,
   filterManifestForPull,
@@ -4692,6 +4695,24 @@ function createApp(db) {
    * Vorhandene Dokumente_Monteur/<FN>/Montage/<Auftragsordner>/ alignen (Rename/Merge).
    * Keine leeren FN-/Montage-Bäume auf Vorrat.
    */
+  async function flushPhotoDuplicateDeletes(localJobId, dispoBaseUrl, serverJobId, technicianId, authHeader) {
+    const pending = listPhotoDuplicateDeletes(db, localJobId);
+    if (!pending.length || !dispoBaseUrl || !serverJobId || !technicianId) return;
+    for (const rel of pending) {
+      try {
+        await deleteJobProjectFileOnDispo(dispoBaseUrl, serverJobId, technicianId, authHeader, rel);
+        forgetPhotoDuplicateDelete(db, localJobId, rel);
+      } catch (err) {
+        const msg = err && err.message ? String(err.message) : '';
+        if (err && (err.status === 400 || err.status === 404) && /nicht gefunden/i.test(msg)) {
+          forgetPhotoDuplicateDelete(db, localJobId, rel);
+          continue;
+        }
+        console.warn('[photo-duplicates] Server-Löschen', rel, msg);
+      }
+    }
+  }
+
   async function ensureJobReiseFolderLayout(localJobId, reiseDir, technicianIdOpt) {
     if (!reiseDir || !fs.existsSync(reiseDir)) return { fabMap: [], montageFolderName: '' };
     const fabMap = await ensureFabMapCanonicalForJob(localJobId, reiseDir);
@@ -4711,6 +4732,12 @@ function createApp(db) {
       });
       const renamed = alignResult && Array.isArray(alignResult.renamed) ? alignResult.renamed : [];
       const leftover = alignResult && Array.isArray(alignResult.leftover) ? alignResult.leftover : [];
+      const removedPhotos =
+        alignResult && Array.isArray(alignResult.removedPhotos) ? alignResult.removedPhotos : [];
+      if (removedPhotos.length) {
+        queuePhotoDuplicateDeletes(db, localJobId, removedPhotos);
+        console.warn('[photo-duplicates] identische Kopien entfernt', removedPhotos.length);
+      }
       const renamedSeen = new Set();
       for (const oldName of renamed) {
         const oldN = String(oldName || '').trim();
@@ -19532,6 +19559,14 @@ function createApp(db) {
           }
         }
         const layoutPull = await ensureJobReiseFolderLayout(localJobId, targetDir, technicianId);
+        try {
+          await flushPhotoDuplicateDeletes(localJobId, dispoBaseUrl, serverJobId, technicianId, authHeader);
+        } catch (photoDelErr) {
+          console.warn(
+            '[photo-duplicates] Server-Löschen',
+            photoDelErr && photoDelErr.message ? photoDelErr.message : photoDelErr,
+          );
+        }
         const montageFolderName = layoutPull.montageFolderName || resolveMonteurAuftragsordnerName(localJobId, technicianId);
         try {
           ensureCanonicalFnFolders(
